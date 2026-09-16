@@ -1,4 +1,4 @@
-# Discord Split VPN
+# MOGGED VPN
 
 VPN simples que troca só o IP do Discord. Serve pra liberar o compartilhamento de tela (Go Live) sem afetar o resto da sua internet.
 
