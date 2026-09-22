@@ -1,0 +1,28 @@
+APP_NAME = "Mogged VPN"
+APP_VERSION = "1.1.0"
+APP_MUTEX_NAME = "Global\\MoggedVPN_SingleInstance"
+
+APP_WIDTH = 1024
+APP_HEIGHT = 580
+
+STATUS_DISCONNECTED = "DISCONNECTED"
+STATUS_CONNECTING = "CONNECTING"
+STATUS_CONNECTED = "CONNECTED"
+STATUS_ERROR = "ERROR"
+
+MODE_FULL = "full"
+MODE_DISCORD = "discord"
+
+VPN_GATE_API_URLS = [
+    "https://www.vpngate.net/api/iphone/",
+]
+
+CONNECT_TIMEOUT_SEC = 25.0
+HANDSHAKE_WINDOW_SEC = 12
+SERVER_FETCH_TIMEOUT_SEC = 10.0
+DISCORD_GRACEFUL_TIMEOUT_SEC = 5.0
+
+EXPECTED_BINARIES = {
+    "openvpn.exe": "OpenVPN Technologies, Inc.",
+    "wintun.dll": "WireGuard LLC",
+}

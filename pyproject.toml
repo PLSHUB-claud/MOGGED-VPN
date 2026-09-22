@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mogged-vpn"
+version = "1.1.0"
+description = "Cliente VPN hardened e focado em split-tunneling para Discord no Windows"
+readme = "README.md"
+authors = [{ name = "Mogged Security" }]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
+    "pillow>=10.0.0",
+    "pystray>=0.19.5",
+    "pywin32>=306",
+    "psutil>=5.9.0",
+    "cryptography>=41.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.11.0",
+    "pytest-timeout>=2.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "bandit>=1.7.5",
+]
+
+[project.scripts]
+mogged-vpn = "mogged.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
