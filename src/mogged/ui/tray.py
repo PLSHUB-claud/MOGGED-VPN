@@ -43,6 +43,9 @@ class TrayManager:
             mode = getattr(self.app, "current_mode", "full").upper()
             return f"Status: {status} ({mode})"
 
+        def on_check_updates(icon, item):
+            self.app.root.after(0, lambda: self.app.check_for_updates(quiet=False))
+
         def on_exit(icon, item):
             self.app.root.after(0, self.app.quit_app)
 
@@ -51,6 +54,7 @@ class TrayManager:
             Menu.SEPARATOR,
             item(get_status_text, None, enabled=False),
             item("Conectar / Desconectar", on_toggle_connect),
+            item("Verificar Atualizações", on_check_updates),
             Menu.SEPARATOR,
             item("Sair", on_exit),
         )

@@ -53,6 +53,8 @@ class InstallerApp:
         self.launch_after = tk.BooleanVar(value=True)
         self._setup_window_styling()
         self._setup_ui()
+        if '--silent' in sys.argv or '--update' in sys.argv:
+            self.root.after(100, self.start_installation)
 
     def _setup_window_styling(self):
         ico_path = get_resource_path('app_icon.ico')
@@ -153,6 +155,12 @@ class InstallerApp:
 
     def _run_install(self):
         try:
+            if sys.platform == 'win32':
+                try:
+                    subprocess.run(['taskkill', '/f', '/im', EXE_NAME], capture_output=True, timeout=3)
+                except Exception:
+                    pass
+                time.sleep(0.5)
             self._update_progress(10, 'Criando diretório de instalação...')
             os.makedirs(self.install_dir, exist_ok=True)
             bin_dir = os.path.join(self.install_dir, 'bin')
@@ -222,7 +230,8 @@ class InstallerApp:
                     subprocess.Popen([target_exe], cwd=os.path.dirname(target_exe))
                 except Exception:
                     pass
-            self.root.after(0, lambda: messagebox.showinfo('Mogged VPN', 'O Mogged VPN foi instalado com sucesso!\nO atalho com o ícone do Chad já está disponível na Área de Trabalho.'))
+            if '--silent' not in sys.argv:
+                self.root.after(0, lambda: messagebox.showinfo('Mogged VPN', 'O Mogged VPN foi instalado com sucesso!\nO atalho com o ícone do Chad já está disponível na Área de Trabalho.'))
             self.root.after(0, self.root.destroy)
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror('Erro na Instalação', f'Ocorreu um erro durante a instalação:\n{e}'))

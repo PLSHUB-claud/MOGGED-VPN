@@ -100,9 +100,9 @@ class VpnEngine:
             if mode == 'discord' and (clean.startswith('redirect-gateway') or clean.startswith('route-gateway')):
                 continue
             lines.append(line)
-        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 10', 'hand-window 12', 'server-poll-timeout 8', 'mssfix 1360', 'sndbuf 524288', 'rcvbuf 524288', 'windows-driver wintun']
+        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 8', 'hand-window 8', 'server-poll-timeout 4', 'mssfix 1360', 'tun-mtu 1500', 'sndbuf 524288', 'rcvbuf 524288', 'windows-driver wintun', 'block-ipv6']
         if mode == 'full':
-            custom_directives.extend(['redirect-gateway def1', 'dhcp-option DNS 1.1.1.1', 'dhcp-option DNS 8.8.8.8'])
+            custom_directives.extend(['redirect-gateway def1', 'block-outside-dns', 'dhcp-option DNS 1.1.1.1', 'dhcp-option DNS 1.0.0.1'])
         elif mode == 'discord':
             custom_directives.extend(get_discord_openvpn_directives())
         final_config = '\n'.join(lines) + '\n' + '\n'.join(custom_directives) + '\n'
@@ -188,7 +188,7 @@ class VpnEngine:
             reader_thread.start()
             connection_successful = False
             start_time = time.time()
-            CONNECT_TIMEOUT = 25.0
+            CONNECT_TIMEOUT = 10.0
             while not self._stop_requested:
                 try:
                     line = q.get(timeout=0.2)
@@ -203,7 +203,11 @@ class VpnEngine:
                             mode_label = 'Entire PC' if mode == 'full' else 'Discord'
                             self._update_status(STATUS_CONNECTED, f'Connected successfully ({mode_label})')
                             break
-                        if any((err in line_str for err in ['AUTH_FAILED', 'TLS Error', 'Cannot resolve host', 'Connection refused', 'Connection timed out', 'SIGTERM', 'process exiting', 'Exiting due to fatal error'])):
+                        if 'TLS: Initial packet from' in line_str:
+                            self._update_status(STATUS_CONNECTING, 'Handshake TLS...')
+                        elif 'Peer Connection Initiated' in line_str:
+                            self._update_status(STATUS_CONNECTING, 'Configurando tunel...')
+                        if any((err in line_str for err in ['AUTH_FAILED', 'TLS Error', 'Cannot resolve host', 'Connection refused', 'Connection timed out', 'SIGTERM', 'SIGUSR1', 'process exiting', 'Exiting due to fatal error'])):
                             logger.warning(f'Server error during handshake: {line_str[:120]}')
                             break
                 if time.time() - start_time > CONNECT_TIMEOUT:

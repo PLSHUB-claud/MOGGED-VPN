@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 from mogged.constants import (
     MODE_DISCORD,
     MODE_FULL,
+    RETRY_BACKOFF_BASE,
     STATUS_CONNECTED,
     STATUS_CONNECTING,
     STATUS_DISCONNECTED,
@@ -90,8 +91,8 @@ class VPNManager:
                     break
 
                 self.active_server = srv
-                curr_c = srv.get("country_long", "Server")
-                self._set_status(STATUS_CONNECTING, "Conectando...")
+                curr_c = srv.get("country_long", "Servidor")
+                self._set_status(STATUS_CONNECTING, f"Tentativa {idx}/{total}: {curr_c}...")
                 logger.info(f"Tentativa {idx}/{total}: {srv.get('ip')} ({curr_c})")
 
                 success = self.backend.connect(
@@ -112,7 +113,10 @@ class VPNManager:
                         f"Servidor {srv.get('ip')} falhou. Alternando para {idx + 1}/{total} "
                         f"({next_s.get('country_long')})..."
                     )
-                    for _ in range(15):
+                    self._set_status(STATUS_CONNECTING, f"Alternando para {next_s.get('country_long', 'proximo')}...")
+                    backoff = RETRY_BACKOFF_BASE * (2 ** (idx - 1))
+                    steps = max(1, int(backoff * 10))
+                    for _ in range(steps):
                         if self._stop_requested:
                             break
                         time.sleep(0.1)

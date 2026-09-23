@@ -63,13 +63,15 @@ class OpenVPNBackend(VPNBackend):
             "persist-tun",
             "verb 3",
             "resolv-retry 2",
-            "connect-timeout 10",
-            "hand-window 12",
-            "server-poll-timeout 8",
+            "connect-timeout 8",
+            "hand-window 8",
+            "server-poll-timeout 4",
             "mssfix 1360",
+            "tun-mtu 1500",
             "sndbuf 524288",
             "rcvbuf 524288",
             "windows-driver wintun",
+            "block-ipv6",
         ]
 
         if mode == "full":
@@ -158,6 +160,10 @@ class OpenVPNBackend(VPNBackend):
                             if on_status:
                                 on_status(STATUS_CONNECTED, f"Conectado ({mode})")
                             break
+                        if "TLS: Initial packet from" in line_str and on_status:
+                            on_status(STATUS_CONNECTING, "Handshake TLS...")
+                        elif "Peer Connection Initiated" in line_str and on_status:
+                            on_status(STATUS_CONNECTING, "Configurando tunel...")
                         if any(
                             err in line_str
                             for err in (
@@ -167,6 +173,8 @@ class OpenVPNBackend(VPNBackend):
                                 "Connection refused",
                                 "Connection timed out",
                                 "Exiting due to fatal error",
+                                "SIGUSR1",
+                                "SIGTERM",
                             )
                         ):
                             logger.warning(f"Erro no handshake: {line_str[:100]}")

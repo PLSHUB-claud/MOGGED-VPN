@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 from typing import Any, Dict, List, Optional
 import urllib.request
 
@@ -12,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
 
 from mogged.constants import (
     APP_HEIGHT,
+    APP_VERSION,
     APP_WIDTH,
     MODE_DISCORD,
     MODE_FULL,
@@ -22,6 +24,7 @@ from mogged.constants import (
 )
 from mogged.discord.process_manager import DiscordProcessManager
 from mogged.network.server_fetcher import ServerFetcher
+from mogged.network.server_manager import ServerManager
 from mogged.network.server_validator import ServerValidator
 from mogged.network.vpn_manager import VPNManager
 from mogged.storage.secure_store import SecureStore
@@ -193,6 +196,7 @@ class MainWindow:
         self._setup_window_styling()
 
         self.fetcher = ServerFetcher()
+        self.server_manager = ServerManager(fetcher=self.fetcher)
         self.validator = ServerValidator()
         self.secure_store = SecureStore()
         self.vpn_manager = VPNManager(on_status_change=self._on_status_change)
@@ -220,6 +224,7 @@ class MainWindow:
 
         threading.Thread(target=self._fast_fetch_ip, daemon=True).start()
         threading.Thread(target=self._load_servers_thread, daemon=True).start()
+        threading.Thread(target=self._check_updates_background, daemon=True).start()
 
         self.root.bind("<Key-h>", lambda e: self.toggle_controls())
         self.root.bind("<Key-H>", lambda e: self.toggle_controls())
@@ -604,6 +609,7 @@ class MainWindow:
 
             def _async_conn():
                 try:
+                    self.root.after(0, lambda: self.canvas.itemconfigure(self.status_text, text="Testando servidores..."))
                     target_servers = [s for s in self.servers if s.get("country_short") == self.selected_country_code]
                     if not target_servers:
                         target_servers = list(self.servers)
@@ -611,9 +617,10 @@ class MainWindow:
                         self.root.after(0, lambda: self._apply_status(STATUS_ERROR, "Nenhum servidor disponível."))
                         return
 
-                    target_servers.sort(key=lambda s: (-s.get("speed_mbps", 0.0), s.get("ping", 999)))
-                    target = target_servers[0]
-                    fallbacks = target_servers[1:3]
+                    checked_servers = self.server_manager.health_check(target_servers, timeout=0.85)
+                    active_pool = checked_servers if checked_servers else target_servers
+                    target = active_pool[0]
+                    fallbacks = self.server_manager.get_fallback_candidates(self.selected_country_code, exclude_server_id=target.get("id"))
                     self.vpn_manager.connect(target, mode=self.current_mode, fallback_servers=fallbacks)
                 finally:
                     self._connect_in_progress = False
@@ -632,13 +639,19 @@ class MainWindow:
             self.canvas.itemconfigure(self.status_dot, fill="#22c55e")
             lbl = "Todo o PC" if self.vpn_manager.active_mode == MODE_FULL else "Discord"
             self.canvas.itemconfigure(self.status_text, text=f"Conectado ({lbl})")
+            if self.vpn_manager.active_server:
+                srv_id = self.vpn_manager.active_server.get("id", "")
+                self.server_manager.record_success(srv_id)
             threading.Thread(target=self._fast_fetch_ip, daemon=True).start()
         elif status == STATUS_CONNECTING:
             self.canvas.itemconfigure(self.status_dot, fill="#f59e0b")
-            self.canvas.itemconfigure(self.status_text, text="Conectando...")
+            self.canvas.itemconfigure(self.status_text, text=msg or "Conectando...")
         elif status == STATUS_ERROR:
             self.canvas.itemconfigure(self.status_dot, fill="#ef4444")
-            self.canvas.itemconfigure(self.status_text, text="Erro de Conexão")
+            self.canvas.itemconfigure(self.status_text, text=msg or "Erro de Conexão")
+            if self.vpn_manager.active_server:
+                srv_id = self.vpn_manager.active_server.get("id", "")
+                self.server_manager.record_failure(srv_id)
         else:
             self.canvas.itemconfigure(self.status_dot, fill="#94a3b8")
             self.canvas.itemconfigure(self.status_text, text="Desconectado")
@@ -655,6 +668,43 @@ class MainWindow:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def _check_updates_background(self) -> None:
+        time.sleep(2.0)
+        self.check_for_updates(quiet=True)
+
+    def check_for_updates(self, quiet: bool = False) -> None:
+        def _worker():
+            try:
+                from mogged.updates.updater import Updater
+                updater = Updater()
+                info = updater.check_for_updates()
+                if info:
+                    self.root.after(0, lambda: self._show_update_dialog(info))
+                elif not quiet:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Mogged VPN",
+                            f"Você já está utilizando a versão mais recente (v{APP_VERSION}).",
+                        ),
+                    )
+            except Exception as e:
+                logger.debug(f"Erro ao verificar atualizações: {e}")
+                if not quiet:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Mogged VPN",
+                            f"Não foi possível verificar atualizações no momento:\n{e}",
+                        ),
+                    )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _show_update_dialog(self, info: Dict[str, Any]) -> None:
+        from mogged.ui.update_dialog import UpdateDialog
+        UpdateDialog(self.root, info, app_controller=self)
 
     def quit_app(self) -> None:
         self._close_popup()
