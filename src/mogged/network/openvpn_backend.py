@@ -24,6 +24,7 @@ class OpenVPNBackend(VPNBackend):
         self.openvpn_bin = openvpn_bin_path or self._discover_openvpn()
         self.process: Optional[subprocess.Popen] = None
         self.active_config_path: Optional[str] = None
+        self.active_auth_path: Optional[str] = None
         self._stop_requested = False
         self._connected = False
         self._verifier = BinaryVerifier()
@@ -53,11 +54,18 @@ class OpenVPNBackend(VPNBackend):
             clean = line.strip()
             if mode == "discord" and (clean.startswith("redirect-gateway") or clean.startswith("route-gateway")):
                 continue
+            if clean.startswith("auth-user-pass") or clean.startswith("#auth-user-pass") or clean.startswith(";auth-user-pass"):
+                continue
             lines.append(line)
+
+        auth_fd, auth_path = tempfile.mkstemp(suffix=".txt", prefix="mogged_auth_")
+        with os.fdopen(auth_fd, "w", encoding="utf-8") as f:
+            f.write("vpn\nvpn\n")
+        self.active_auth_path = auth_path
+        auth_path_escaped = auth_path.replace("\\", "/")
 
         directives = [
             "",
-            "# --- MOGGED VPN SECURE ENGINE DIRECTIVES ---",
             "nobind",
             "persist-key",
             "persist-tun",
@@ -72,6 +80,9 @@ class OpenVPNBackend(VPNBackend):
             "rcvbuf 524288",
             "windows-driver wintun",
             "block-ipv6",
+            f'auth-user-pass "{auth_path_escaped}"',
+            "auth-nocache",
+            "auth-retry nointeract",
         ]
 
         if mode == "full":
@@ -184,7 +195,7 @@ class OpenVPNBackend(VPNBackend):
                     logger.warning("Tempo limite esgotado no handshake OpenVPN.")
                     break
 
-                if self.process.poll() is not None:
+                if self.process is not None and self.process.poll() is not None:
                     break
 
             if not handshake_success:
@@ -192,7 +203,7 @@ class OpenVPNBackend(VPNBackend):
                 self._cleanup_temp_file()
                 return False
 
-            while not self._stop_requested and self.process.poll() is None:
+            while not self._stop_requested and self.process is not None and self.process.poll() is None:
                 try:
                     line = q.get(timeout=0.5)
                     if line is None:
@@ -253,5 +264,12 @@ class OpenVPNBackend(VPNBackend):
         if path and os.path.exists(path):
             try:
                 os.remove(path)
+            except Exception:
+                pass
+        auth_path = self.active_auth_path
+        self.active_auth_path = None
+        if auth_path and os.path.exists(auth_path):
+            try:
+                os.remove(auth_path)
             except Exception:
                 pass

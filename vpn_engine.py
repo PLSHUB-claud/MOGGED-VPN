@@ -70,6 +70,7 @@ class VpnEngine:
         self.process: Optional[subprocess.Popen] = None
         self.monitor_thread: Optional[threading.Thread] = None
         self.active_config_path: Optional[str] = None
+        self.active_auth_path: Optional[str] = None
         self.connected_since: Optional[float] = None
         self.active_server: Optional[Dict[str, Any]] = None
         self.active_mode: str = 'full'
@@ -99,8 +100,15 @@ class VpnEngine:
             clean = line.strip()
             if mode == 'discord' and (clean.startswith('redirect-gateway') or clean.startswith('route-gateway')):
                 continue
+            if clean.startswith('auth-user-pass') or clean.startswith('#auth-user-pass') or clean.startswith(';auth-user-pass'):
+                continue
             lines.append(line)
-        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 20', 'hand-window 20', 'server-poll-timeout 8', 'mssfix 1360', 'tun-mtu 1500', 'sndbuf 524288', 'rcvbuf 524288', 'block-ipv6']
+        auth_fd, auth_path = tempfile.mkstemp(suffix='.txt', prefix='mogged_auth_')
+        with os.fdopen(auth_fd, 'w', encoding='utf-8') as f:
+            f.write('vpn\nvpn\n')
+        self.active_auth_path = auth_path
+        auth_path_escaped = auth_path.replace('\\', '/')
+        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 20', 'hand-window 20', 'server-poll-timeout 8', 'mssfix 1360', 'tun-mtu 1500', 'sndbuf 524288', 'rcvbuf 524288', 'block-ipv6', f'auth-user-pass "{auth_path_escaped}"', 'auth-nocache', 'auth-retry nointeract']
         if mode == 'full':
             custom_directives.extend(['redirect-gateway def1', 'block-outside-dns', 'dhcp-option DNS 1.1.1.1', 'dhcp-option DNS 1.0.0.1'])
         elif mode == 'discord':
@@ -213,13 +221,13 @@ class VpnEngine:
                 if time.time() - start_time > CONNECT_TIMEOUT:
                     logger.warning(f"Server {server.get('ip')} connection timeout after {CONNECT_TIMEOUT}s")
                     break
-                if self.process.poll() is not None:
+                if self.process is not None and self.process.poll() is not None:
                     break
             if not connection_successful:
                 self._kill_process()
                 self._cleanup_temp_file()
                 return False
-            while not self._stop_requested and self.process.poll() is None:
+            while not self._stop_requested and self.process is not None and self.process.poll() is None:
                 try:
                     line = q.get(timeout=0.5)
                     if line is None:
@@ -280,5 +288,12 @@ class VpnEngine:
         if path and os.path.exists(path):
             try:
                 os.remove(path)
+            except Exception:
+                pass
+        auth_p = self.active_auth_path
+        self.active_auth_path = None
+        if auth_p and os.path.exists(auth_p):
+            try:
+                os.remove(auth_p)
             except Exception:
                 pass
