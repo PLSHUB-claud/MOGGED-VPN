@@ -19,6 +19,9 @@ class ServerManager:
         self.blacklist: Set[str] = set()
         self.latency_cache: Dict[str, Tuple[float, float]] = {}
 
+    def set_servers(self, servers: List[Dict[str, Any]]) -> None:
+        self.servers = list(servers)
+
     def load_servers(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         self.servers = self.fetcher.fetch(force_refresh=force_refresh)
         return self.servers
@@ -46,9 +49,17 @@ class ServerManager:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                     sock.settimeout(timeout)
                     sock.connect((ip, port))
-                    sock.send(b"\x38\x00\x00\x00\x00\x00\x00\x00\x00")
-                api_ping = float(server.get("ping", 300))
-                return (server, api_ping < 900, api_ping)
+                    sock.send(b"\x38\x01\x02\x03\x04\x05\x06\x07\x08\x00")
+                    sock.recv(1024)
+                rtt = (time.time() - t0) * 1000.0
+                return (server, True, rtt)
+            except (ConnectionResetError, ConnectionRefusedError):
+                return (server, False, 9999.0)
+            except socket.timeout:
+                api_ping = float(server.get("ping", 999))
+                if api_ping < 500:
+                    return (server, True, api_ping + 1000.0)
+                return (server, False, 9999.0)
             except Exception:
                 return (server, False, 9999.0)
 

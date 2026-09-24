@@ -203,7 +203,7 @@ def test_fetch_returns_cache_when_fresh(tmp_path: Path) -> None:
     """Se o cache for recente (< 600s), não deve chamar a rede."""
     cached_data = {
         "timestamp": time.time(),  # fresquíssimo
-        "servers": [{"ip": "8.8.8.8", "name": "cached"}],
+        "servers": [{"ip": "8.8.8.8", "name": "cached", "port": 443, "protocol": "tcp"}],
     }
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
@@ -256,7 +256,7 @@ def test_save_and_load_cache_roundtrip(tmp_path: Path) -> None:
     """ServerFetcher.save_cache seguido de load_cache deve recuperar os mesmos dados."""
     cache_dir = tmp_path / "c"
     fetcher = ServerFetcher(cache_dir=cache_dir)
-    servers = [{"ip": "1.2.3.4", "name": "test-node"}]
+    servers = [{"ip": "1.2.3.4", "name": "test-node", "port": 443, "protocol": "tcp"}]
     fetcher.save_cache(servers)
     loaded, ts = fetcher.load_cache()
     assert loaded == servers

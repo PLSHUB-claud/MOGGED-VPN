@@ -448,6 +448,7 @@ class MainWindow:
     def _load_servers_thread(self, force_refresh: bool = False) -> None:
         try:
             self.servers = self.fetcher.fetch(force_refresh=force_refresh)
+            self.server_manager.set_servers(self.servers)
             self._recalculate_countries()
             self.root.after(0, self._populate_countries)
         except Exception as e:
@@ -481,7 +482,13 @@ class MainWindow:
             self.selected_country_label = "Nenhum servidor encontrado"
             self._update_dropdown_image()
             return
-        if not self.selected_country_code:
+
+        preferred = self.secure_store.get("preferred_country_code")
+        available_codes = {c["code"] for c in self.countries}
+
+        if preferred and preferred in available_codes and not self.selected_country_code:
+            self.selected_country_code = preferred
+        elif not self.selected_country_code:
             self.selected_country_code = self.countries[0]["code"]
 
         for c in self.countries:
@@ -565,6 +572,10 @@ class MainWindow:
             def make_select(target_c):
                 def _sel(e=None):
                     self.selected_country_code = target_c["code"]
+                    try:
+                        self.secure_store.set("preferred_country_code", self.selected_country_code)
+                    except Exception:
+                        pass
                     self.selected_server = None
                     p = f"{target_c['best_ping']}ms" if target_c["best_ping"] < 9000 else "N/A"
                     self.selected_country_label = f"{target_c['name']}   ({target_c['server_count']} serv. • {p})"
@@ -639,6 +650,11 @@ class MainWindow:
             self.canvas.itemconfigure(self.status_dot, fill="#22c55e")
             lbl = "Todo o PC" if self.vpn_manager.active_mode == MODE_FULL else "Discord"
             self.canvas.itemconfigure(self.status_text, text=f"Conectado ({lbl})")
+            if self.selected_country_code:
+                try:
+                    self.secure_store.set("preferred_country_code", self.selected_country_code)
+                except Exception:
+                    pass
             if self.vpn_manager.active_server:
                 srv_id = self.vpn_manager.active_server.get("id", "")
                 self.server_manager.record_success(srv_id)

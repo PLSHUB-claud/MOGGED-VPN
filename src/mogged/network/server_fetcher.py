@@ -10,7 +10,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 
-from mogged.constants import VPN_GATE_API_URLS
+from mogged.constants import SERVER_FETCH_TIMEOUT_SEC, VPN_GATE_API_URLS
 from mogged.exceptions import ServerFetchError
 from mogged.network.server_validator import is_valid_public_ip
 
@@ -50,6 +50,29 @@ class ServerFetcher:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_file = self.cache_dir / "servers_cache.json"
 
+    def _ensure_server_metadata(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for s in servers:
+            if "port" not in s or "protocol" not in s:
+                ovpn_b64 = s.get("ovpn_config_b64", "")
+                proto = "tcp"
+                port = 443
+                if ovpn_b64:
+                    try:
+                        cfg = base64.b64decode(ovpn_b64).decode("utf-8", errors="ignore")
+                        for line in cfg.splitlines():
+                            ls = line.strip()
+                            if ls.startswith("proto "):
+                                proto = ls.split()[1].lower()
+                            elif ls.startswith("remote "):
+                                parts = ls.split()
+                                if len(parts) >= 3:
+                                    port = int(parts[2])
+                    except Exception:
+                        pass
+                s["port"] = port
+                s["protocol"] = proto
+        return servers
+
     def load_cache(self) -> Tuple[List[Dict[str, Any]], float]:
         if not self.cache_file.is_file():
             candidates = [
@@ -65,7 +88,8 @@ class ServerFetcher:
                     try:
                         with open(bundled, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                            return data.get("servers", []), float(data.get("timestamp", 0))
+                            srvs = self._ensure_server_metadata(data.get("servers", []))
+                            return srvs, float(data.get("timestamp", 0))
                     except Exception as e:
                         logger.warning(f"Erro ao carregar cache bundled: {e}")
             return [], 0.0
@@ -73,7 +97,8 @@ class ServerFetcher:
         try:
             with open(self.cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("servers", []), float(data.get("timestamp", 0))
+                srvs = self._ensure_server_metadata(data.get("servers", []))
+                return srvs, float(data.get("timestamp", 0))
         except Exception as e:
             logger.warning(f"Falha ao ler cache de servidores: {e}")
             return [], 0.0
@@ -85,6 +110,10 @@ class ServerFetcher:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
             temp_file.replace(self.cache_file)
+            root_cache = Path("servers_cache.json")
+            if root_cache.is_file():
+                with open(root_cache, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"Falha ao salvar cache de servidores: {e}")
 
@@ -92,7 +121,7 @@ class ServerFetcher:
         cached_servers, last_time = self.load_cache()
         now = time.time()
 
-        if not force_refresh and cached_servers and (now - last_time < 600):
+        if not force_refresh and cached_servers and (now - last_time < 180):
             return cached_servers
 
         raw_csv: Optional[str] = None
@@ -105,7 +134,7 @@ class ServerFetcher:
                     url,
                     headers={"User-Agent": "MoggedVPN-SecureClient/1.1.0"},
                 )
-                with urllib.request.urlopen(req, timeout=10.0) as resp:  # nosec B310
+                with urllib.request.urlopen(req, timeout=SERVER_FETCH_TIMEOUT_SEC) as resp:  # nosec B310
                     content = resp.read(10 * 1024 * 1024)
                     raw_csv = content.decode("utf-8", errors="ignore")
                     if raw_csv and "HostName" in raw_csv:

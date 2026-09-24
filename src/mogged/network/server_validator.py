@@ -68,8 +68,24 @@ def probe_server_connectivity(
         except Exception:
             return (server, False, 9999.0)
     else:
-        api_ping = float(server.get("ping", 500))
-        return (server, api_ping < 1000, api_ping)
+        t0 = time.time()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect((ip, int(port)))
+                sock.send(b"\x38\x01\x02\x03\x04\x05\x06\x07\x08\x00")
+                sock.recv(1024)
+            rtt = (time.time() - t0) * 1000.0
+            return (server, True, rtt)
+        except (ConnectionResetError, ConnectionRefusedError):
+            return (server, False, 9999.0)
+        except socket.timeout:
+            api_ping = float(server.get("ping", 999))
+            if api_ping < 500:
+                return (server, True, api_ping + 1000.0)
+            return (server, False, 9999.0)
+        except Exception:
+            return (server, False, 9999.0)
 
 class ServerValidator:
 

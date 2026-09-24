@@ -113,3 +113,49 @@ def test_get_countries():
     assert br["server_count"] == 2
     assert br["best_ping"] == 15
     assert br["max_speed"] == 80.0
+
+def test_set_servers():
+    sm = ServerManager(fetcher=MagicMock())
+    test_srv = [{"id": "KR-1", "country_short": "KR"}]
+    sm.set_servers(test_srv)
+    assert len(sm.servers) == 1
+    assert sm.servers[0]["id"] == "KR-1"
+
+def test_probe_server_udp_success():
+    sm = ServerManager(fetcher=MagicMock())
+    server = {"id": "US-8.8.8.8", "ip": "8.8.8.8", "port": 1194, "protocol": "udp"}
+
+    with patch("socket.socket") as mock_sock_cls:
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = b"\x40\x01\x02"
+        mock_sock_cls.return_value.__enter__.return_value = mock_sock
+        srv, is_alive, rtt = sm.probe_server(server, timeout=0.5)
+
+    assert is_alive is True
+    assert rtt < 1000.0
+
+def test_probe_server_udp_reset():
+    sm = ServerManager(fetcher=MagicMock())
+    server = {"id": "US-8.8.8.8", "ip": "8.8.8.8", "port": 1194, "protocol": "udp"}
+
+    with patch("socket.socket") as mock_sock_cls:
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = ConnectionResetError()
+        mock_sock_cls.return_value.__enter__.return_value = mock_sock
+        srv, is_alive, rtt = sm.probe_server(server, timeout=0.5)
+
+    assert is_alive is False
+    assert rtt == 9999.0
+
+def test_probe_server_udp_timeout():
+    sm = ServerManager(fetcher=MagicMock())
+    server = {"id": "US-8.8.8.8", "ip": "8.8.8.8", "port": 1194, "protocol": "udp", "ping": 100}
+
+    with patch("socket.socket") as mock_sock_cls:
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = socket.timeout()
+        mock_sock_cls.return_value.__enter__.return_value = mock_sock
+        srv, is_alive, rtt = sm.probe_server(server, timeout=0.5)
+
+    assert is_alive is True
+    assert rtt == 1100.0
