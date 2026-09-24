@@ -24,11 +24,12 @@ def create_app_bundle():
                 print(f'Adicionado: {asset}')
         bin_dir = os.path.join(BASE_DIR, 'bin')
         if os.path.isdir(bin_dir):
-            for f in os.listdir(bin_dir):
-                fp = os.path.join(bin_dir, f)
-                if os.path.isfile(fp):
-                    z.write(fp, os.path.join('bin', f))
-                    print(f'Adicionado bin: {f}')
+            for root_d, _, files in os.walk(bin_dir):
+                for f in files:
+                    fp = os.path.join(root_d, f)
+                    rel = os.path.relpath(fp, BASE_DIR)
+                    z.write(fp, rel)
+                    print(f'Adicionado bin: {rel}')
     print(f'Bundle app_data.zip criado ({os.path.getsize(ZIP_BUNDLE) // 1024} KB)')
 
 def build_setup_exe():

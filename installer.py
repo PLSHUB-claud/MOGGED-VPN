@@ -195,7 +195,7 @@ class InstallerApp:
                         shutil.copytree(s, d, dirs_exist_ok=True)
                     else:
                         shutil.copy2(s, d)
-            self._update_progress(65, 'Registrando placa de rede virtual e driver Wintun...')
+            self._update_progress(65, 'Registrando adaptadores de rede e drivers...')
             wintun_src = os.path.join(bin_dir, 'wintun.dll')
             if os.path.isfile(wintun_src):
                 try:
@@ -211,10 +211,28 @@ class InstallerApp:
                         wintun_lib.WintunCloseAdapter(ad)
                 except Exception:
                     pass
+            drivers_dir = os.path.join(bin_dir, 'drivers')
+            if os.path.isdir(drivers_dir):
+                for root_d, _, files in os.walk(drivers_dir):
+                    for f in files:
+                        if f.lower().endswith('.inf'):
+                            inf_path = os.path.join(root_d, f)
+                            try:
+                                subprocess.run(['pnputil', '/add-driver', inf_path, '/install'], capture_output=True, timeout=15)
+                            except Exception:
+                                pass
             tapctl = os.path.join(bin_dir, 'tapctl.exe')
             if os.path.isfile(tapctl):
                 try:
-                    subprocess.run([tapctl, 'create', '--name', 'MoggedVPN'], creationflags=134217728, timeout=5)
+                    subprocess.run([tapctl, 'create', '--hwid', 'root\\tap0901', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    subprocess.run([tapctl, 'create', '--hwid', 'tap0901', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    subprocess.run([tapctl, 'create', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
                 except Exception:
                     pass
             target_exe = os.path.join(self.install_dir, EXE_NAME)

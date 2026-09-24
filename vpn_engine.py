@@ -100,7 +100,7 @@ class VpnEngine:
             if mode == 'discord' and (clean.startswith('redirect-gateway') or clean.startswith('route-gateway')):
                 continue
             lines.append(line)
-        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 20', 'hand-window 20', 'server-poll-timeout 8', 'mssfix 1360', 'tun-mtu 1500', 'sndbuf 524288', 'rcvbuf 524288', 'windows-driver wintun', 'block-ipv6']
+        custom_directives = ['', '# --- MOGGED VPN CONNECTION OPTIONS ---', 'nobind', 'persist-key', 'persist-tun', 'verb 3', 'resolv-retry 2', 'connect-timeout 20', 'hand-window 20', 'server-poll-timeout 8', 'mssfix 1360', 'tun-mtu 1500', 'sndbuf 524288', 'rcvbuf 524288', 'block-ipv6']
         if mode == 'full':
             custom_directives.extend(['redirect-gateway def1', 'block-outside-dns', 'dhcp-option DNS 1.1.1.1', 'dhcp-option DNS 1.0.0.1'])
         elif mode == 'discord':

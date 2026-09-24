@@ -16,6 +16,9 @@ def is_valid_public_ip(ip_str: str) -> bool:
     if ip_obj.version != 4:
         return False
 
+    if hasattr(ip_obj, "is_global") and not ip_obj.is_global:
+        return False
+
     if (
         ip_obj.is_private
         or ip_obj.is_loopback
@@ -26,9 +29,21 @@ def is_valid_public_ip(ip_str: str) -> bool:
     ):
         return False
 
-    cgnat_net = ipaddress.IPv4Network("100.64.0.0/10")
-    if ip_obj in cgnat_net:
-        return False
+    special_networks = (
+        ipaddress.IPv4Network("0.0.0.0/8"),
+        ipaddress.IPv4Network("100.64.0.0/10"),
+        ipaddress.IPv4Network("192.0.0.0/24"),
+        ipaddress.IPv4Network("192.0.2.0/24"),
+        ipaddress.IPv4Network("192.88.99.0/24"),
+        ipaddress.IPv4Network("198.18.0.0/15"),
+        ipaddress.IPv4Network("198.51.100.0/24"),
+        ipaddress.IPv4Network("203.0.113.0/24"),
+        ipaddress.IPv4Network("240.0.0.0/4"),
+        ipaddress.IPv4Network("255.255.255.255/32"),
+    )
+    for net in special_networks:
+        if ip_obj in net:
+            return False
 
     return True
 
