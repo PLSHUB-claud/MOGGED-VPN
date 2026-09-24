@@ -37,6 +37,20 @@ def get_resource_path(filename: str) -> str:
         return local
     return filename
 
+def make_shortcut_admin(lnk_path):
+    try:
+        if not os.path.isfile(lnk_path):
+            return
+        with open(lnk_path, 'r+b') as f:
+            f.seek(0x15)
+            b = f.read(1)
+            if b:
+                flags = ord(b) | 0x20
+                f.seek(0x15)
+                f.write(bytes([flags]))
+    except Exception:
+        pass
+
 class InstallerApp:
 
     def __init__(self, root: tk.Tk):
@@ -182,18 +196,42 @@ class InstallerApp:
                     else:
                         shutil.copy2(s, d)
             self._update_progress(65, 'Registrando placa de rede virtual e driver Wintun...')
+            wintun_src = os.path.join(bin_dir, 'wintun.dll')
+            if os.path.isfile(wintun_src):
+                try:
+                    sys32 = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32')
+                    if os.path.isdir(sys32):
+                        shutil.copy2(wintun_src, os.path.join(sys32, 'wintun.dll'))
+                except Exception:
+                    pass
+                try:
+                    wintun_lib = ctypes.CDLL(wintun_src)
+                    ad = wintun_lib.WintunCreateAdapter(ctypes.c_wchar_p('MoggedVPN'), ctypes.c_wchar_p('Wintun'), None)
+                    if ad:
+                        wintun_lib.WintunCloseAdapter(ad)
+                except Exception:
+                    pass
             tapctl = os.path.join(bin_dir, 'tapctl.exe')
             if os.path.isfile(tapctl):
                 try:
                     subprocess.run([tapctl, 'create', '--name', 'MoggedVPN'], creationflags=134217728, timeout=5)
                 except Exception:
                     pass
-            self._update_progress(80, 'Criando atalhos na Área de Trabalho e Menu Iniciar...')
             target_exe = os.path.join(self.install_dir, EXE_NAME)
             if not os.path.isfile(target_exe):
                 target_exe = os.path.join(self.install_dir, 'dist', 'MoggedVPN', EXE_NAME)
             if not os.path.isfile(target_exe):
                 target_exe = os.path.join(self.install_dir, 'main.py')
+            openvpn_exe = os.path.join(bin_dir, 'openvpn.exe')
+            if sys.platform == 'win32':
+                try:
+                    subprocess.run(['netsh', 'advfirewall', 'firewall', 'delete', 'rule', 'name=Mogged VPN OpenVPN'], capture_output=True, timeout=3)
+                    subprocess.run(['netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=Mogged VPN OpenVPN', f'program={openvpn_exe}', 'dir=out', 'action=allow', 'enable=yes'], capture_output=True, timeout=5)
+                    subprocess.run(['netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=Mogged VPN OpenVPN In', f'program={openvpn_exe}', 'dir=in', 'action=allow', 'enable=yes'], capture_output=True, timeout=5)
+                    subprocess.run(['netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=Mogged VPN Client', f'program={target_exe}', 'dir=out', 'action=allow', 'enable=yes'], capture_output=True, timeout=5)
+                except Exception:
+                    pass
+            self._update_progress(80, 'Criando atalhos na Área de Trabalho e Menu Iniciar...')
             icon_file = os.path.join(self.install_dir, 'app_icon.ico')
             if not os.path.isfile(icon_file):
                 icon_file = target_exe
@@ -208,6 +246,7 @@ class InstallerApp:
                     s.IconLocation = icon_file
                     s.Description = 'Mogged VPN Client'
                     s.Save()
+                    make_shortcut_admin(s_path)
                 if self.create_startmenu_shortcut.get():
                     start_menu = shell.SpecialFolders('Programs')
                     sm_dir = os.path.join(start_menu, 'Mogged VPN')
@@ -219,6 +258,7 @@ class InstallerApp:
                     s.IconLocation = icon_file
                     s.Description = 'Mogged VPN Client'
                     s.Save()
+                    make_shortcut_admin(s_path)
             except Exception as e:
                 print(f'Aviso ao criar atalhos: {e}')
             self._update_progress(95, 'Registrando no Windows...')

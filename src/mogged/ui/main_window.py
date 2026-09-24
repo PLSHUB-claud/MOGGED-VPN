@@ -617,7 +617,7 @@ class MainWindow:
                         self.root.after(0, lambda: self._apply_status(STATUS_ERROR, "Nenhum servidor disponível."))
                         return
 
-                    checked_servers = self.server_manager.health_check(target_servers, timeout=0.85)
+                    checked_servers = self.server_manager.health_check(target_servers, timeout=1.5)
                     active_pool = checked_servers if checked_servers else target_servers
                     target = active_pool[0]
                     fallbacks = self.server_manager.get_fallback_candidates(self.selected_country_code, exclude_server_id=target.get("id"))

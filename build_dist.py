@@ -34,7 +34,7 @@ def clean_previous_builds():
 
 def build_executable(onefile=False):
     clean_previous_builds()
-    cmd = [sys.executable, '-m', 'PyInstaller', '--name', APP_NAME, '--noconsole', '--clean']
+    cmd = [sys.executable, '-m', 'PyInstaller', '--name', APP_NAME, '--noconsole', '--uac-admin', '--clean']
     cmd.extend(['--paths', os.path.join(BASE_DIR, 'src')])
     if onefile:
         cmd.append('--onefile')
