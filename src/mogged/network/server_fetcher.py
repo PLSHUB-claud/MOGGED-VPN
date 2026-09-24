@@ -6,15 +6,22 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
+import urllib.parse
 
-from mogged.constants import SERVER_FETCH_TIMEOUT_SEC, VPN_GATE_API_URLS
+from mogged.constants import (
+    OPENVPN_PROVIDERS,
+    SERVER_FETCH_TIMEOUT_SEC,
+    VPN_GATE_API_URLS,
+)
 from mogged.exceptions import ServerFetchError
 from mogged.network.server_validator import is_valid_public_ip
 
 logger = logging.getLogger("Mogged.Network.ServerFetcher")
+
 
 def get_country_flag(code: str) -> str:
     if not code or len(code) != 2:
@@ -23,6 +30,7 @@ def get_country_flag(code: str) -> str:
         return "".join(chr(127397 + ord(c.upper())) for c in code)
     except Exception:
         return "🌐"
+
 
 def clean_country_name(name: str) -> str:
     if not name:
@@ -39,6 +47,223 @@ def clean_country_name(name: str) -> str:
     }
     return replacements.get(clean, clean)
 
+
+def _parse_ovpn_meta(ovpn_b64: str) -> Tuple[int, str]:
+    port = 443
+    protocol = "tcp"
+    try:
+        cfg = base64.b64decode(ovpn_b64).decode("utf-8", errors="ignore")
+        for line in cfg.splitlines():
+            ls = line.strip()
+            if ls.startswith("proto "):
+                protocol = ls.split()[1].lower()
+            elif ls.startswith("remote "):
+                parts = ls.split()
+                if len(parts) >= 3:
+                    port = int(parts[2])
+    except Exception:
+        pass
+    return port, protocol
+
+
+def _http_get(url: str, timeout: float = SERVER_FETCH_TIMEOUT_SEC, max_bytes: int = 10 * 1024 * 1024) -> Optional[bytes]:
+    if not url.startswith("https://"):
+        logger.warning(f"URL rejeitada (não HTTPS): {url}")
+        return None
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "MoggedVPN-SecureClient/1.1.0",
+                "Accept": "*/*",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+            return resp.read(max_bytes)
+    except Exception as e:
+        logger.warning(f"HTTP GET falhou para {url}: {e}")
+        return None
+
+
+def _build_server_entry(
+    ip: str,
+    country_short: str,
+    country_long: str,
+    ovpn_b64: str,
+    ping: int = 999,
+    speed_mbps: float = 0.0,
+    sessions: int = 0,
+    idx: int = 1,
+    source: str = "vpngate",
+) -> Dict[str, Any]:
+    port, protocol = _parse_ovpn_meta(ovpn_b64)
+    return {
+        "id": f"{country_short}-{ip}-{source}",
+        "name": f"Node-{country_short}-{idx:02d}",
+        "ip": ip,
+        "port": port,
+        "protocol": protocol,
+        "country_long": country_long or "Unknown",
+        "country_short": country_short,
+        "flag": get_country_flag(country_short),
+        "ping": ping,
+        "speed_mbps": speed_mbps,
+        "sessions": sessions,
+        "ovpn_config_b64": ovpn_b64,
+        "source": source,
+    }
+
+
+class _VpnGateParser:
+    def parse(self, raw: bytes, source_name: str = "vpngate") -> List[Dict[str, Any]]:
+        text = raw.decode("utf-8", errors="ignore")
+        lines = [
+            l.lstrip("#").strip()
+            for l in text.splitlines()
+            if l.strip() and not l.startswith("*")
+        ]
+        reader = csv.DictReader(lines)
+        servers: List[Dict[str, Any]] = []
+        idx = 1
+        for row in reader:
+            ip = row.get("IP", "").strip()
+            country_long = clean_country_name(row.get("CountryLong", "").strip())
+            country_short = row.get("CountryShort", "").strip().upper()
+            ovpn_b64 = row.get("OpenVPN_ConfigData_Base64", "").strip()
+
+            if not is_valid_public_ip(ip) or not ovpn_b64:
+                continue
+
+            try:
+                ping = int(row.get("Ping", 999))
+            except (ValueError, TypeError):
+                ping = 999
+
+            try:
+                speed_bps = int(row.get("Speed", 0))
+                speed_mbps = round(speed_bps / (1024 * 1024), 1)
+            except (ValueError, TypeError):
+                speed_mbps = 0.0
+
+            try:
+                sessions = int(row.get("NumVpnSessions", 0))
+            except (ValueError, TypeError):
+                sessions = 0
+
+            servers.append(
+                _build_server_entry(
+                    ip=ip,
+                    country_short=country_short,
+                    country_long=country_long,
+                    ovpn_b64=ovpn_b64,
+                    ping=ping,
+                    speed_mbps=speed_mbps,
+                    sessions=sessions,
+                    idx=idx,
+                    source=source_name,
+                )
+            )
+            idx += 1
+        return servers
+
+
+class _AutoOvpnParser:
+    BASE_RAW = "https://raw.githubusercontent.com/9xN/auto-ovpn/main/"
+    MAX_FILES = 30
+
+    def parse(self, raw: bytes, source_name: str = "auto_ovpn") -> List[Dict[str, Any]]:
+        try:
+            tree = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception as e:
+            logger.warning(f"auto_ovpn: falha ao parsear árvore JSON: {e}")
+            return []
+
+        ovpn_paths = [
+            item["path"]
+            for item in tree.get("tree", [])
+            if item.get("path", "").endswith(".ovpn") and item.get("type") == "blob"
+        ]
+
+        logger.info(f"auto_ovpn: {len(ovpn_paths)} arquivos .ovpn encontrados no repositório")
+
+        servers: List[Dict[str, Any]] = []
+        idx = 1
+
+        for path in ovpn_paths[: self._max_files()]:
+            raw_url = self.BASE_RAW + path
+            file_bytes = _http_get(raw_url, timeout=8.0, max_bytes=64 * 1024)
+            if not file_bytes:
+                continue
+
+            try:
+                ovpn_text = file_bytes.decode("utf-8", errors="ignore")
+                ip, country_short, country_long = self._extract_meta(ovpn_text, path)
+                if not ip or not is_valid_public_ip(ip):
+                    continue
+
+                ovpn_b64 = base64.b64encode(file_bytes).decode("ascii")
+                servers.append(
+                    _build_server_entry(
+                        ip=ip,
+                        country_short=country_short,
+                        country_long=country_long,
+                        ovpn_b64=ovpn_b64,
+                        ping=999,
+                        speed_mbps=0.0,
+                        sessions=0,
+                        idx=idx,
+                        source=source_name,
+                    )
+                )
+                idx += 1
+                logger.debug(f"auto_ovpn: adicionado {ip} ({country_short})")
+            except Exception as e:
+                logger.warning(f"auto_ovpn: erro ao processar {path}: {e}")
+
+        logger.info(f"auto_ovpn: {len(servers)} servidores carregados")
+        return servers
+
+    def _max_files(self) -> int:
+        return self.MAX_FILES
+
+    def _extract_meta(self, ovpn_text: str, path: str) -> Tuple[str, str, str]:
+        ip = ""
+        country_short = "XX"
+        country_long = "Unknown"
+
+        for line in ovpn_text.splitlines():
+            ls = line.strip()
+            if ls.startswith("remote "):
+                parts = ls.split()
+                if len(parts) >= 2:
+                    ip = parts[1]
+                    break
+
+        name = Path(path).stem.upper()
+        m = re.search(r"[_\-]([A-Z]{2})[_\-\.]", name)
+        if m:
+            country_short = m.group(1)
+        elif len(name) >= 2 and name[:2].isalpha():
+            country_short = name[:2]
+
+        country_names = {
+            "JP": "Japan", "US": "United States", "KR": "South Korea",
+            "TH": "Thailand", "RU": "Russia", "CA": "Canada",
+            "AU": "Australia", "DE": "Germany", "SG": "Singapore",
+            "FR": "France", "GB": "United Kingdom", "BR": "Brazil",
+            "IN": "India", "NL": "Netherlands", "IT": "Italy",
+            "PL": "Poland", "SE": "Sweden", "CH": "Switzerland",
+        }
+        country_long = country_names.get(country_short, country_short)
+        return ip, country_short, country_long
+
+
+_PARSERS = {
+    "vpngate": _VpnGateParser(),
+    "auto_ovpn": _AutoOvpnParser(),
+}
+
+
 class ServerFetcher:
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
@@ -54,23 +279,9 @@ class ServerFetcher:
         for s in servers:
             if "port" not in s or "protocol" not in s:
                 ovpn_b64 = s.get("ovpn_config_b64", "")
-                proto = "tcp"
-                port = 443
-                if ovpn_b64:
-                    try:
-                        cfg = base64.b64decode(ovpn_b64).decode("utf-8", errors="ignore")
-                        for line in cfg.splitlines():
-                            ls = line.strip()
-                            if ls.startswith("proto "):
-                                proto = ls.split()[1].lower()
-                            elif ls.startswith("remote "):
-                                parts = ls.split()
-                                if len(parts) >= 3:
-                                    port = int(parts[2])
-                    except Exception:
-                        pass
+                port, protocol = _parse_ovpn_meta(ovpn_b64) if ovpn_b64 else (443, "tcp")
                 s["port"] = port
-                s["protocol"] = proto
+                s["protocol"] = protocol
         return servers
 
     def load_cache(self) -> Tuple[List[Dict[str, Any]], float]:
@@ -117,6 +328,29 @@ class ServerFetcher:
         except Exception as e:
             logger.warning(f"Falha ao salvar cache de servidores: {e}")
 
+    def _fetch_provider(self, provider: Dict[str, Any]) -> List[Dict[str, Any]]:
+        name = provider["name"]
+        url = provider["url"]
+        parser_key = provider["parser"]
+        parser = _PARSERS.get(parser_key)
+
+        if not parser:
+            logger.warning(f"Parser '{parser_key}' não encontrado para provider '{name}'")
+            return []
+
+        logger.info(f"Buscando servidores via '{name}': {url}")
+        raw = _http_get(url, timeout=SERVER_FETCH_TIMEOUT_SEC)
+        if not raw:
+            return []
+
+        try:
+            servers = parser.parse(raw, source_name=name)
+            logger.info(f"Provider '{name}': {len(servers)} servidores obtidos")
+            return servers
+        except Exception as e:
+            logger.warning(f"Provider '{name}' falhou ao parsear: {e}")
+            return []
+
     def fetch(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         cached_servers, last_time = self.load_cache()
         now = time.time()
@@ -124,108 +358,39 @@ class ServerFetcher:
         if not force_refresh and cached_servers and (now - last_time < 180):
             return cached_servers
 
-        raw_csv: Optional[str] = None
-        for url in VPN_GATE_API_URLS:
-            if not url.startswith("https://"):
-                continue
-            try:
-                logger.info(f"Buscando servidores via HTTPS: {url}")
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "MoggedVPN-SecureClient/1.1.0"},
-                )
-                with urllib.request.urlopen(req, timeout=SERVER_FETCH_TIMEOUT_SEC) as resp:  # nosec B310
-                    content = resp.read(10 * 1024 * 1024)
-                    raw_csv = content.decode("utf-8", errors="ignore")
-                    if raw_csv and "HostName" in raw_csv:
-                        break
-            except Exception as e:
-                logger.warning(f"Erro ao acessar {url}: {e}")
+        providers = sorted(OPENVPN_PROVIDERS, key=lambda p: p.get("priority", 99))
 
-        if not raw_csv:
-            if cached_servers:
-                logger.warning("Falha na consulta HTTPS. Utilizando cache seguro.")
-                return cached_servers
-            raise ServerFetchError("Não foi possível obter servidores e não há cache válido.")
+        all_servers: List[Dict[str, Any]] = []
+        seen_ips = set()
 
-        parsed_servers: List[Dict[str, Any]] = []
-        try:
-            lines = [
-                l.lstrip("#").strip()
-                for l in raw_csv.splitlines()
-                if l.strip() and not l.startswith("*")
-            ]
-            reader = csv.DictReader(lines)
-            idx = 1
-            for row in reader:
-                ip = row.get("IP", "").strip()
-                country_long = clean_country_name(row.get("CountryLong", "").strip())
-                country_short = row.get("CountryShort", "").strip().upper()
-                ovpn_b64 = row.get("OpenVPN_ConfigData_Base64", "").strip()
+        results: Dict[str, List[Dict[str, Any]]] = {}
+        threads = []
 
-                if not is_valid_public_ip(ip) or not ovpn_b64:
-                    continue
+        def _worker(prov):
+            results[prov["name"]] = self._fetch_provider(prov)
 
-                port = 443
-                protocol = "tcp"
-                try:
-                    cfg_text = base64.b64decode(ovpn_b64).decode("utf-8", errors="ignore")
-                    for line in cfg_text.splitlines():
-                        line_s = line.strip()
-                        if line_s.startswith("proto "):
-                            protocol = line_s.split()[1].lower()
-                        elif line_s.startswith("remote "):
-                            parts = line_s.split()
-                            if len(parts) >= 3:
-                                port = int(parts[2])
-                except Exception:
-                    pass
+        for provider in providers:
+            t = threading.Thread(target=_worker, args=(provider,), daemon=True)
+            threads.append(t)
+            t.start()
 
-                try:
-                    ping = int(row.get("Ping", 999))
-                except ValueError:
-                    ping = 999
+        for t in threads:
+            t.join(timeout=SERVER_FETCH_TIMEOUT_SEC + 10)
 
-                try:
-                    speed_bps = int(row.get("Speed", 0))
-                    speed_mbps = round(speed_bps / (1024 * 1024), 1)
-                except ValueError:
-                    speed_mbps = 0.0
+        for provider in providers:
+            for srv in results.get(provider["name"], []):
+                ip = srv.get("ip", "")
+                if ip and ip not in seen_ips:
+                    seen_ips.add(ip)
+                    all_servers.append(srv)
 
-                try:
-                    sessions = int(row.get("NumVpnSessions", 0))
-                except ValueError:
-                    sessions = 0
+        if all_servers:
+            logger.info(f"Total de servidores únicos carregados: {len(all_servers)}")
+            self.save_cache(all_servers)
+            return all_servers
 
-                display_name = f"Node-{country_short}-{idx:02d}"
-                idx += 1
+        if cached_servers:
+            logger.warning("Todos os providers falharam. Usando cache.")
+            return cached_servers
 
-                parsed_servers.append(
-                    {
-                        "id": f"{country_short}-{ip}",
-                        "name": display_name,
-                        "ip": ip,
-                        "port": port,
-                        "protocol": protocol,
-                        "country_long": country_long or "Unknown",
-                        "country_short": country_short,
-                        "flag": get_country_flag(country_short),
-                        "ping": ping,
-                        "speed_mbps": speed_mbps,
-                        "sessions": sessions,
-                        "ovpn_config_b64": ovpn_b64,
-                    }
-                )
-
-            if parsed_servers:
-                self.save_cache(parsed_servers)
-                logger.info(f"API atualizada: {len(parsed_servers)} servidores válidos.")
-                return parsed_servers
-            elif cached_servers:
-                return cached_servers
-            raise ServerFetchError("Nenhum servidor público válido encontrado no CSV.")
-        except Exception as e:
-            logger.error(f"Erro ao processar dados CSV: {e}")
-            if cached_servers:
-                return cached_servers
-            raise ServerFetchError(f"Erro no processamento da lista de servidores: {e}")
+        raise ServerFetchError("Não foi possível obter servidores e não há cache válido.")

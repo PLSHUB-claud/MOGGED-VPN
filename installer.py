@@ -174,6 +174,10 @@ class InstallerApp:
                     subprocess.run(['taskkill', '/f', '/im', EXE_NAME], capture_output=True, timeout=3)
                 except Exception:
                     pass
+                try:
+                    subprocess.run(['taskkill', '/f', '/im', 'openvpn.exe'], capture_output=True, timeout=3)
+                except Exception:
+                    pass
                 time.sleep(0.5)
             self._update_progress(10, 'Criando diretório de instalação...')
             os.makedirs(self.install_dir, exist_ok=True)

@@ -72,10 +72,12 @@ def test_fetcher_skips_http_urls_silently(tmp_path: Path) -> None:
 
 def test_fetcher_raises_when_only_http_urls_configured(tmp_path: Path) -> None:
     """Se apenas URLs http:// estiverem configuradas, deve lançar ServerFetchError sem rede."""
-    only_http = ["http://evil.com/api", "http://another.com/api"]
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", only_http):
+    only_http_providers = [
+        {"name": "bad1", "url": "http://evil.com/api", "parser": "vpngate", "priority": 1},
+        {"name": "bad2", "url": "http://another.com/api", "parser": "vpngate", "priority": 2},
+    ]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", only_http_providers):
         fetcher = ServerFetcher(cache_dir=tmp_path)
-        # Isolate from bundled servers_cache.json so no fallback is available
         with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
             with pytest.raises(ServerFetchError):
                 fetcher.fetch(force_refresh=True)
@@ -83,14 +85,15 @@ def test_fetcher_raises_when_only_http_urls_configured(tmp_path: Path) -> None:
 
 def test_fetcher_never_calls_urlopen_for_http(tmp_path: Path) -> None:
     """urlopen NÃO deve ser chamado para URLs http://."""
-    http_urls = ["http://leak.example.com/api"]
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", http_urls):
+    http_only_providers = [{"name": "bad", "url": "http://leak.example.com/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", http_only_providers):
         with patch("urllib.request.urlopen") as mock_urlopen:
             fetcher = ServerFetcher(cache_dir=tmp_path)
-            try:
-                fetcher.fetch(force_refresh=True)
-            except ServerFetchError:
-                pass
+            with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
+                try:
+                    fetcher.fetch(force_refresh=True)
+                except ServerFetchError:
+                    pass
 
     mock_urlopen.assert_not_called()
 

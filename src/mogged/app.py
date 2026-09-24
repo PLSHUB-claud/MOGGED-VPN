@@ -148,6 +148,18 @@ def run() -> None:
     except Exception as e:
         logger.debug(f"Aviso ao limpar regras do KillSwitch no startup: {e}")
 
+    try:
+        import subprocess
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "openvpn.exe", "/T"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000 if sys.platform == "win32" else 0,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
     if not ensure_single_instance():
         logger.info("Mogged VPN já em execução. Trazendo janela ativa para o foco...")
         bring_existing_to_front()

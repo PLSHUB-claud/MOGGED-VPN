@@ -78,7 +78,6 @@ class OpenVPNBackend(VPNBackend):
             "tun-mtu 1500",
             "sndbuf 524288",
             "rcvbuf 524288",
-            "windows-driver wintun",
             "block-ipv6",
             f'auth-user-pass "{auth_path_escaped}"',
             "auth-nocache",
@@ -227,30 +226,24 @@ class OpenVPNBackend(VPNBackend):
         proc = self.process
         self.process = None
         self._connected = False
-        if proc is None:
-            return
-
         try:
             subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                ["taskkill", "/F", "/IM", "openvpn.exe", "/T"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 timeout=5,
             )
         except Exception:
+            pass
+        if proc is not None:
             try:
-                proc.terminate()
+                proc.wait(timeout=4)
             except Exception:
-                pass
-
-        try:
-            proc.wait(timeout=4)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
     def disconnect(self) -> None:
         self._stop_requested = True

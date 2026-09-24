@@ -31,7 +31,7 @@ def test_prepare_config_full_mode(mock_openvpn_bin: Path):
         content = f.read()
 
     assert "redirect-gateway def1" in content
-    assert "windows-driver wintun" in content
+    assert "block-ipv6" in content
     assert "block-outside-dns" in content
 
     backend.active_config_path = cfg_path

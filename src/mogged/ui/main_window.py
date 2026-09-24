@@ -278,13 +278,13 @@ class MainWindow:
         overlay = Image.new("RGBA", (APP_WIDTH, APP_HEIGHT), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        p1 = [20, 16, 260, 52]
+        p1 = [20, 16, 300, 52]
         crop1 = bg.crop(p1).filter(ImageFilter.GaussianBlur(10))
         bg.paste(crop1, p1)
         draw.rounded_rectangle(p1, radius=18, fill=(15, 20, 30, 140), outline=(255, 255, 255, 170), width=1)
         draw.line([p1[0] + 18, p1[1] + 1, p1[2] - 18, p1[1] + 1], fill=(255, 255, 255, 230), width=1)
 
-        p2 = [272, 16, 480, 52]
+        p2 = [312, 16, 530, 52]
         crop2 = bg.crop(p2).filter(ImageFilter.GaussianBlur(10))
         bg.paste(crop2, p2)
         draw.rounded_rectangle(p2, radius=18, fill=(15, 20, 30, 140), outline=(255, 255, 255, 170), width=1)
@@ -314,7 +314,7 @@ class MainWindow:
             52, 34, text="Desconectado", anchor="w", fill="#ffffff", font=("Segoe UI", 10, "bold")
         )
         self.ip_text = self.canvas.create_text(
-            288, 34, text=f"IP: {self.public_ip}", anchor="w", fill="#ffffff", font=("Segoe UI", 10, "bold")
+            328, 34, text=f"IP: {self.public_ip}", anchor="w", fill="#ffffff", font=("Segoe UI", 10, "bold")
         )
 
         self._update_eye_button(slashed=not self.controls_hidden)
@@ -621,6 +621,23 @@ class MainWindow:
             def _async_conn():
                 try:
                     self.root.after(0, lambda: self.canvas.itemconfigure(self.status_text, text="Testando servidores..."))
+                    if not self.servers:
+                        self.root.after(0, lambda: self.canvas.itemconfigure(self.status_text, text="Buscando servidores..."))
+                        t_wait = time.time()
+                        while not self.servers and (time.time() - t_wait < 6.0):
+                            time.sleep(0.25)
+                        if not self.servers:
+                            self.servers = self.fetcher.fetch(force_refresh=False)
+                            if not self.servers:
+                                self.servers = self.fetcher.fetch(force_refresh=True)
+                            if self.servers:
+                                self.server_manager.set_servers(self.servers)
+                                self._recalculate_countries()
+                                self.root.after(0, self._populate_countries)
+
+                    if not self.selected_country_code and self.countries:
+                        self.selected_country_code = self.countries[0]["code"]
+
                     target_servers = [s for s in self.servers if s.get("country_short") == self.selected_country_code]
                     if not target_servers:
                         target_servers = list(self.servers)
@@ -630,9 +647,21 @@ class MainWindow:
 
                     checked_servers = self.server_manager.health_check(target_servers, timeout=1.5)
                     active_pool = checked_servers if checked_servers else target_servers
+                    if active_pool and active_pool[0].get("live_rtt") is None:
+                        global_cands = [s for s in self.servers if s.get("id") not in self.server_manager.blacklist]
+                        global_cands.sort(key=lambda s: (-s.get("speed_mbps", 0.0), s.get("ping", 999)))
+                        global_checked = self.server_manager.health_check(global_cands[:10], timeout=1.5)
+                        if global_checked and any(s.get("live_rtt") is not None for s in global_checked):
+                            active_pool = [s for s in global_checked if s.get("live_rtt") is not None]
+
                     target = active_pool[0]
-                    fallbacks = self.server_manager.get_fallback_candidates(self.selected_country_code, exclude_server_id=target.get("id"))
-                    self.vpn_manager.connect(target, mode=self.current_mode, fallback_servers=fallbacks)
+                    raw_fallbacks = self.server_manager.get_fallback_candidates(self.selected_country_code, exclude_server_id=target.get("id"))
+                    confirmed_fallbacks = [s for s in active_pool[1:3] if s.get("live_rtt") is not None and s.get("id") != target.get("id")]
+                    for fb in raw_fallbacks:
+                        if fb.get("id") != target.get("id") and not any(cf.get("id") == fb.get("id") for cf in confirmed_fallbacks):
+                            confirmed_fallbacks.append(fb)
+
+                    self.vpn_manager.connect(target, mode=self.current_mode, fallback_servers=confirmed_fallbacks)
                 finally:
                     self._connect_in_progress = False
 
@@ -661,10 +690,14 @@ class MainWindow:
             threading.Thread(target=self._fast_fetch_ip, daemon=True).start()
         elif status == STATUS_CONNECTING:
             self.canvas.itemconfigure(self.status_dot, fill="#f59e0b")
-            self.canvas.itemconfigure(self.status_text, text=msg or "Conectando...")
+            clean_msg = msg or "Conectando..."
+            if len(clean_msg) > 22:
+                clean_msg = clean_msg[:22] + "..."
+            self.canvas.itemconfigure(self.status_text, text=clean_msg)
         elif status == STATUS_ERROR:
             self.canvas.itemconfigure(self.status_dot, fill="#ef4444")
-            self.canvas.itemconfigure(self.status_text, text=msg or "Erro de Conexão")
+            err_text = "Falha na Conexão" if ("Falha ao conectar" in (msg or "") or len(msg or "") > 22) else (msg or "Erro de Conexão")
+            self.canvas.itemconfigure(self.status_text, text=err_text)
             if self.vpn_manager.active_server:
                 srv_id = self.vpn_manager.active_server.get("id", "")
                 self.server_manager.record_failure(srv_id)

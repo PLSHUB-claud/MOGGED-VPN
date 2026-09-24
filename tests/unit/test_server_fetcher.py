@@ -85,9 +85,9 @@ def test_clean_country_name_empty_returns_unknown() -> None:
 
 def test_fetch_rejects_plain_http_urls(tmp_path: Path) -> None:
     """Nenhuma URL http:// deve ser tentada — apenas https:// é permitido."""
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["http://evil.com/api"]):
+    http_only_providers = [{"name": "bad", "url": "http://evil.com/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", http_only_providers):
         fetcher = ServerFetcher(cache_dir=tmp_path)
-        # Mock load_cache to return empty (no bundled cache interference)
         with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
             with pytest.raises(ServerFetchError):
                 fetcher.fetch(force_refresh=True)
@@ -118,14 +118,15 @@ def test_fetch_reads_at_most_10mb(tmp_path: Path) -> None:
 
     mock_resp = _make_mock_resp(csv_with_header)
 
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["https://test.local/api"]):
+    single_provider = [{"name": "vpngate", "url": "https://test.local/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             fetcher = ServerFetcher(cache_dir=tmp_path)
             with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
                 try:
                     fetcher.fetch(force_refresh=True)
                 except ServerFetchError:
-                    pass  # CSV vazio — esperado; o que importa é o argumento de read()
+                    pass
 
     mock_resp.read.assert_called_once_with(10 * 1024 * 1024)
 

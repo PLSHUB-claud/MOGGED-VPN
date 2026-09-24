@@ -17,6 +17,27 @@ VPN_GATE_API_URLS = [
     "https://www.vpngate.net/api/iphone/",
 ]
 
+OPENVPN_PROVIDERS = [
+    {
+        "name": "vpngate",
+        "url": "https://www.vpngate.net/api/iphone/",
+        "parser": "vpngate",
+        "priority": 1,
+    },
+    {
+        "name": "vpngate_udp",
+        "url": "https://raw.githubusercontent.com/hoang-rio/vpn-gate-openvpn-udp/refs/heads/master/vpn_servers.csv",
+        "parser": "vpngate",
+        "priority": 2,
+    },
+    {
+        "name": "auto_ovpn",
+        "url": "https://api.github.com/repos/9xN/auto-ovpn/git/trees/main?recursive=1",
+        "parser": "auto_ovpn",
+        "priority": 3,
+    },
+]
+
 CONNECT_TIMEOUT_SEC = 25.0
 HANDSHAKE_WINDOW_SEC = 20
 SERVER_FETCH_TIMEOUT_SEC = 15.0
