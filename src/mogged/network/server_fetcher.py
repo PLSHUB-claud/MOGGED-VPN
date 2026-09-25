@@ -15,7 +15,6 @@ import urllib.parse
 from mogged.constants import (
     OPENVPN_PROVIDERS,
     SERVER_FETCH_TIMEOUT_SEC,
-    VPN_GATE_API_URLS,
 )
 from mogged.exceptions import ServerFetchError
 from mogged.network.server_validator import is_valid_public_ip
@@ -199,18 +198,18 @@ class _AutoOvpnJsonParser:
                 continue
 
             try:
-                ping = int(row.get("ping", 999))
+                ping = int(float(str(row.get("ping", 999)).strip()))
             except (ValueError, TypeError):
                 ping = 999
 
             try:
-                speed_bps = int(row.get("speed", 0))
+                speed_bps = float(str(row.get("speed", 0)).strip())
                 speed_mbps = round(speed_bps / (1024 * 1024), 1)
             except (ValueError, TypeError):
                 speed_mbps = 0.0
 
             try:
-                sessions = int(row.get("numvpnsessions", 0))
+                sessions = int(float(str(row.get("numvpnsessions", 0)).strip()))
             except (ValueError, TypeError):
                 sessions = 0
 
@@ -300,9 +299,9 @@ class ServerFetcher:
             logger.warning(f"Falha ao salvar cache de servidores: {e}")
 
     def _fetch_provider(self, provider: Dict[str, Any]) -> List[Dict[str, Any]]:
-        name = provider["name"]
-        url = provider["url"]
-        parser_key = provider["parser"]
+        name = provider.get("name", "unknown")
+        url = provider.get("url", "")
+        parser_key = provider.get("parser", "")
         parser = _PARSERS.get(parser_key)
 
         if not parser:
@@ -338,18 +337,26 @@ class ServerFetcher:
         threads = []
 
         def _worker(prov):
-            results[prov["name"]] = self._fetch_provider(prov)
+            try:
+                p_name = prov.get("name", "")
+                if p_name:
+                    results[p_name] = self._fetch_provider(prov)
+            except Exception as e:
+                logger.warning(f"Erro no worker do provider: {e}")
 
         for provider in providers:
             t = threading.Thread(target=_worker, args=(provider,), daemon=True)
             threads.append(t)
             t.start()
 
+        join_deadline = time.time() + SERVER_FETCH_TIMEOUT_SEC + 5.0
         for t in threads:
-            t.join(timeout=SERVER_FETCH_TIMEOUT_SEC + 10)
+            rem = max(0.1, join_deadline - time.time())
+            t.join(timeout=rem)
 
         for provider in providers:
-            for srv in results.get(provider["name"], []):
+            p_name = provider.get("name", "")
+            for srv in results.get(p_name, []):
                 ip = srv.get("ip", "")
                 if ip and ip not in seen_ips:
                     seen_ips.add(ip)

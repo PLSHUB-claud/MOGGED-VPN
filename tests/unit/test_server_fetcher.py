@@ -327,3 +327,89 @@ def test_auto_ovpn_json_parser_invalid_entries() -> None:
     assert s["ping"] == 999
     assert s["speed_mbps"] == 0.0
     assert s["sessions"] == 0
+
+
+def test_fetch_parses_valid_auto_ovpn_json(tmp_path: Path) -> None:
+    ovpn_cfg = "client\ndev tun\nproto udp\nremote 45.33.32.156 1194\n"
+    ovpn_b64 = base64.b64encode(ovpn_cfg.encode()).decode()
+    payload = [
+        {
+            "servers": [
+                {
+                    "ip": "45.33.32.156",
+                    "countryshort": "JP",
+                    "countrylong": "Japan",
+                    "openvpn_configdata_base64": ovpn_b64,
+                    "ping": "15",
+                    "speed": "10485760",
+                    "numvpnsessions": "5",
+                }
+            ]
+        },
+        123456789,
+    ]
+    raw = json.dumps(payload).encode("utf-8")
+    mock_resp = _make_mock_resp(raw)
+    single_provider = [{"name": "auto_ovpn", "url": "https://test.local/data.json", "parser": "auto_ovpn", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            fetcher = ServerFetcher(cache_dir=tmp_path)
+            with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
+                servers = fetcher.fetch(force_refresh=True)
+
+    assert len(servers) == 1
+    s = servers[0]
+    assert s["ip"] == "45.33.32.156"
+    assert s["country_short"] == "JP"
+    assert s["source"] == "auto_ovpn"
+    assert s["port"] == 1194
+    assert s["protocol"] == "udp"
+
+
+def test_fetch_multi_provider_deduplication(tmp_path: Path) -> None:
+    csv_bytes = _build_valid_csv(ip="45.33.32.156")
+    ovpn_cfg = "client\ndev tun\nproto udp\nremote 45.33.32.156 1194\n"
+    ovpn_b64 = base64.b64encode(ovpn_cfg.encode()).decode()
+    ovpn_cfg2 = "client\ndev tun\nproto udp\nremote 139.162.100.99 1194\n"
+    ovpn_b64_2 = base64.b64encode(ovpn_cfg2.encode()).decode()
+    payload = [
+        {
+            "servers": [
+                {
+                    "ip": "45.33.32.156",
+                    "countryshort": "US",
+                    "countrylong": "United States",
+                    "openvpn_configdata_base64": ovpn_b64,
+                },
+                {
+                    "ip": "139.162.100.99",
+                    "countryshort": "JP",
+                    "countrylong": "Japan",
+                    "openvpn_configdata_base64": ovpn_b64_2,
+                },
+            ]
+        }
+    ]
+    json_bytes = json.dumps(payload).encode("utf-8")
+
+    def fake_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "csv" in url:
+            return _make_mock_resp(csv_bytes)
+        return _make_mock_resp(json_bytes)
+
+    multi_providers = [
+        {"name": "vpngate", "url": "https://test.local/servers.csv", "parser": "vpngate", "priority": 1},
+        {"name": "auto_ovpn", "url": "https://test.local/data.json", "parser": "auto_ovpn", "priority": 2},
+    ]
+
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", multi_providers):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            fetcher = ServerFetcher(cache_dir=tmp_path)
+            with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
+                servers = fetcher.fetch(force_refresh=True)
+
+    ips = [s["ip"] for s in servers]
+    assert len(ips) == 2
+    assert "45.33.32.156" in ips
+    assert "139.162.100.99" in ips

@@ -229,11 +229,18 @@ class InstallerApp:
             if os.path.isfile(tapctl):
                 adapter_exists = False
                 try:
-                    chk = subprocess.run(['netsh', 'interface', 'show', 'interface', 'name=MoggedVPN'], capture_output=True, timeout=5)
-                    if chk.returncode == 0:
+                    chk_all = subprocess.run(['netsh', 'interface', 'show', 'interface'], capture_output=True, text=True, timeout=5)
+                    if 'MoggedVPN' in (chk_all.stdout or ''):
                         adapter_exists = True
                 except Exception:
                     pass
+                if not adapter_exists:
+                    try:
+                        chk = subprocess.run(['netsh', 'interface', 'show', 'interface', 'name=MoggedVPN'], capture_output=True, timeout=5)
+                        if chk.returncode == 0:
+                            adapter_exists = True
+                    except Exception:
+                        pass
                 if not adapter_exists:
                     try:
                         chk_tap = subprocess.run([tapctl, 'list'], capture_output=True, text=True, timeout=5)

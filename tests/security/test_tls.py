@@ -12,40 +12,28 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from mogged.constants import VPN_GATE_API_URLS
+from mogged.constants import OPENVPN_PROVIDERS, VPN_GATE_API_URLS
 from mogged.exceptions import ServerFetchError
 from mogged.network.server_fetcher import ServerFetcher
 
 
-# ---------------------------------------------------------------------------
-# Verificação das URLs configuradas em constants.py
-# ---------------------------------------------------------------------------
-
-
 def test_all_configured_urls_use_https() -> None:
-    """Todas as URLs em VPN_GATE_API_URLS devem usar esquema https://."""
-    assert len(VPN_GATE_API_URLS) > 0, "VPN_GATE_API_URLS não pode ser vazia"
+    assert len(VPN_GATE_API_URLS) > 0
     for url in VPN_GATE_API_URLS:
-        assert url.startswith("https://"), (
-            f"URL insegura encontrada em VPN_GATE_API_URLS: {url!r}"
-        )
+        assert url.startswith("https://")
+    assert len(OPENVPN_PROVIDERS) > 0
+    for prov in OPENVPN_PROVIDERS:
+        assert prov["url"].startswith("https://")
 
 
 def test_no_http_url_in_configured_urls() -> None:
-    """Nenhuma URL deve começar com http:// (sem criptografia)."""
     for url in VPN_GATE_API_URLS:
-        assert not url.startswith("http://"), (
-            f"URL HTTP sem criptografia detectada: {url!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Rejeição explícita de HTTP em ServerFetcher.fetch()
-# ---------------------------------------------------------------------------
+        assert not url.startswith("http://")
+    for prov in OPENVPN_PROVIDERS:
+        assert not prov["url"].startswith("http://")
 
 
 def test_fetcher_skips_http_urls_silently(tmp_path: Path) -> None:
-    """URLs http:// devem ser ignoradas; o fetcher não deve sequer tentar conectar."""
     http_url = "http://vpngate.net/api/iphone/"
     https_url = "https://vpngate.net/api/iphone/"
 
@@ -53,9 +41,14 @@ def test_fetcher_skips_http_urls_silently(tmp_path: Path) -> None:
 
     def fake_urlopen(req, timeout=None):
         call_log.append(req.full_url if hasattr(req, "full_url") else str(req))
-        raise OSError("network error")  # simular falha de rede para simplificar
+        raise OSError("network error")
 
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", [http_url, https_url]):
+    mixed_providers = [
+        {"name": "bad", "url": http_url, "parser": "vpngate", "priority": 1},
+        {"name": "good", "url": https_url, "parser": "vpngate", "priority": 2},
+    ]
+
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", mixed_providers):
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             fetcher = ServerFetcher(cache_dir=tmp_path)
             try:
@@ -63,11 +56,10 @@ def test_fetcher_skips_http_urls_silently(tmp_path: Path) -> None:
             except ServerFetchError:
                 pass
 
-    # Verificar que apenas a URL HTTPS foi tentada
     for attempted_url in call_log:
-        assert attempted_url.startswith("https://"), (
-            f"ServerFetcher tentou URL não-HTTPS: {attempted_url!r}"
-        )
+        assert attempted_url.startswith("https://")
+    assert len(call_log) == 1
+    assert call_log[0] == https_url
 
 
 def test_fetcher_raises_when_only_http_urls_configured(tmp_path: Path) -> None:
@@ -148,13 +140,13 @@ def test_request_object_rejects_http_by_convention() -> None:
 
 
 def test_fetcher_uses_timeout_in_urlopen(tmp_path: Path) -> None:
-    """urlopen deve ser chamado com timeout > 0 para proteger contra slow-read attacks."""
     mock_resp = MagicMock()
     mock_resp.read.return_value = b"HostName\nno_data"
     mock_resp.__enter__ = lambda s: s
     mock_resp.__exit__ = MagicMock(return_value=False)
 
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["https://test.local/api"]):
+    single_provider = [{"name": "vpngate", "url": "https://test.local/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
         with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
             fetcher = ServerFetcher(cache_dir=tmp_path)
             try:
