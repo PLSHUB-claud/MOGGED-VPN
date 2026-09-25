@@ -178,6 +178,10 @@ class InstallerApp:
                     subprocess.run(['taskkill', '/f', '/im', 'openvpn.exe'], capture_output=True, timeout=3)
                 except Exception:
                     pass
+                try:
+                    subprocess.run(['powershell', '-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'openvpn.exe' or Name = 'MoggedVPN.exe'\" | Invoke-CimMethod -MethodName Terminate"], capture_output=True, timeout=5)
+                except Exception:
+                    pass
                 time.sleep(0.5)
             self._update_progress(10, 'Criando diretório de instalação...')
             os.makedirs(self.install_dir, exist_ok=True)
@@ -317,9 +321,12 @@ class InstallerApp:
                 self.root.after(0, lambda: messagebox.showinfo('Mogged VPN', 'O Mogged VPN foi instalado com sucesso!\nO atalho com o ícone do Chad já está disponível na Área de Trabalho.'))
             self.root.after(0, self.root.destroy)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror('Erro na Instalação', f'Ocorreu um erro durante a instalação:\n{e}'))
-            self.root.after(0, lambda: self.btn_install.configure(state='normal', text='Instalar Agora'))
-            self.root.after(0, lambda: self.btn_cancel.configure(state='normal'))
+            if '--silent' in sys.argv or '--update' in sys.argv:
+                self.root.after(0, self.root.destroy)
+            else:
+                self.root.after(0, lambda: messagebox.showerror('Erro na Instalação', f'Ocorreu um erro durante a instalação:\n{e}'))
+                self.root.after(0, lambda: self.btn_install.configure(state='normal', text='Instalar Agora'))
+                self.root.after(0, lambda: self.btn_cancel.configure(state='normal'))
 
     def _register_uninstall(self, target_exe, icon_file):
         try:
