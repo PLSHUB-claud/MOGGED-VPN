@@ -167,100 +167,75 @@ class _VpnGateParser:
         return servers
 
 
-class _AutoOvpnParser:
-    BASE_RAW = "https://raw.githubusercontent.com/9xN/auto-ovpn/main/"
-    MAX_FILES = 30
-
+class _AutoOvpnJsonParser:
     def parse(self, raw: bytes, source_name: str = "auto_ovpn") -> List[Dict[str, Any]]:
         try:
-            tree = json.loads(raw.decode("utf-8", errors="ignore"))
+            payload = json.loads(raw.decode("utf-8", errors="ignore"))
         except Exception as e:
-            logger.warning(f"auto_ovpn: falha ao parsear árvore JSON: {e}")
+            logger.warning(f"auto_ovpn: falha ao parsear JSON: {e}")
             return []
 
-        ovpn_paths = [
-            item["path"]
-            for item in tree.get("tree", [])
-            if item.get("path", "").endswith(".ovpn") and item.get("type") == "blob"
-        ]
+        if isinstance(payload, list) and len(payload) > 0 and isinstance(payload[0], dict):
+            raw_servers = payload[0].get("servers", [])
+        elif isinstance(payload, dict):
+            raw_servers = payload.get("servers", [])
+        else:
+            return []
 
-        logger.info(f"auto_ovpn: {len(ovpn_paths)} arquivos .ovpn encontrados no repositório")
+        if not isinstance(raw_servers, list):
+            return []
 
         servers: List[Dict[str, Any]] = []
         idx = 1
+        for row in raw_servers:
+            if not isinstance(row, dict):
+                continue
+            ip = str(row.get("ip", "")).strip()
+            country_long = clean_country_name(str(row.get("countrylong", "")).strip())
+            country_short = str(row.get("countryshort", "")).strip().upper()
+            ovpn_b64 = str(row.get("openvpn_configdata_base64", "")).strip()
 
-        for path in ovpn_paths[: self._max_files()]:
-            raw_url = self.BASE_RAW + path
-            file_bytes = _http_get(raw_url, timeout=8.0, max_bytes=64 * 1024)
-            if not file_bytes:
+            if not is_valid_public_ip(ip) or not ovpn_b64:
                 continue
 
             try:
-                ovpn_text = file_bytes.decode("utf-8", errors="ignore")
-                ip, country_short, country_long = self._extract_meta(ovpn_text, path)
-                if not ip or not is_valid_public_ip(ip):
-                    continue
+                ping = int(row.get("ping", 999))
+            except (ValueError, TypeError):
+                ping = 999
 
-                ovpn_b64 = base64.b64encode(file_bytes).decode("ascii")
-                servers.append(
-                    _build_server_entry(
-                        ip=ip,
-                        country_short=country_short,
-                        country_long=country_long,
-                        ovpn_b64=ovpn_b64,
-                        ping=999,
-                        speed_mbps=0.0,
-                        sessions=0,
-                        idx=idx,
-                        source=source_name,
-                    )
+            try:
+                speed_bps = int(row.get("speed", 0))
+                speed_mbps = round(speed_bps / (1024 * 1024), 1)
+            except (ValueError, TypeError):
+                speed_mbps = 0.0
+
+            try:
+                sessions = int(row.get("numvpnsessions", 0))
+            except (ValueError, TypeError):
+                sessions = 0
+
+            servers.append(
+                _build_server_entry(
+                    ip=ip,
+                    country_short=country_short,
+                    country_long=country_long,
+                    ovpn_b64=ovpn_b64,
+                    ping=ping,
+                    speed_mbps=speed_mbps,
+                    sessions=sessions,
+                    idx=idx,
+                    source=source_name,
                 )
-                idx += 1
-                logger.debug(f"auto_ovpn: adicionado {ip} ({country_short})")
-            except Exception as e:
-                logger.warning(f"auto_ovpn: erro ao processar {path}: {e}")
-
-        logger.info(f"auto_ovpn: {len(servers)} servidores carregados")
+            )
+            idx += 1
         return servers
 
-    def _max_files(self) -> int:
-        return self.MAX_FILES
 
-    def _extract_meta(self, ovpn_text: str, path: str) -> Tuple[str, str, str]:
-        ip = ""
-        country_short = "XX"
-        country_long = "Unknown"
-
-        for line in ovpn_text.splitlines():
-            ls = line.strip()
-            if ls.startswith("remote "):
-                parts = ls.split()
-                if len(parts) >= 2:
-                    ip = parts[1]
-                    break
-
-        name = Path(path).stem.upper()
-        m = re.search(r"[_\-]([A-Z]{2})[_\-\.]", name)
-        if m:
-            country_short = m.group(1)
-        elif len(name) >= 2 and name[:2].isalpha():
-            country_short = name[:2]
-
-        country_names = {
-            "JP": "Japan", "US": "United States", "KR": "South Korea",
-            "TH": "Thailand", "RU": "Russia", "CA": "Canada",
-            "AU": "Australia", "DE": "Germany", "SG": "Singapore",
-            "FR": "France", "GB": "United Kingdom", "BR": "Brazil",
-            "IN": "India", "NL": "Netherlands", "IT": "Italy",
-            "PL": "Poland", "SE": "Sweden", "CH": "Switzerland",
-        }
-        country_long = country_names.get(country_short, country_short)
-        return ip, country_short, country_long
-
+_AutoOvpnParser = _AutoOvpnJsonParser
 
 _PARSERS = {
     "vpngate": _VpnGateParser(),
-    "auto_ovpn": _AutoOvpnParser(),
+    "auto_ovpn": _AutoOvpnJsonParser(),
 }
 
 
@@ -321,10 +296,6 @@ class ServerFetcher:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
             temp_file.replace(self.cache_file)
-            root_cache = Path("servers_cache.json")
-            if root_cache.is_file():
-                with open(root_cache, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"Falha ao salvar cache de servidores: {e}")
 

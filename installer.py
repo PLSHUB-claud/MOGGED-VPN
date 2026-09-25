@@ -227,18 +227,32 @@ class InstallerApp:
                                 pass
             tapctl = os.path.join(bin_dir, 'tapctl.exe')
             if os.path.isfile(tapctl):
+                adapter_exists = False
                 try:
-                    subprocess.run([tapctl, 'create', '--hwid', 'root\\tap0901', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
+                    chk = subprocess.run(['netsh', 'interface', 'show', 'interface', 'name=MoggedVPN'], capture_output=True, timeout=5)
+                    if chk.returncode == 0:
+                        adapter_exists = True
                 except Exception:
                     pass
-                try:
-                    subprocess.run([tapctl, 'create', '--hwid', 'tap0901', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
-                except Exception:
-                    pass
-                try:
-                    subprocess.run([tapctl, 'create', '--name', 'MoggedVPN'], capture_output=True, timeout=10)
-                except Exception:
-                    pass
+                if not adapter_exists:
+                    try:
+                        chk_tap = subprocess.run([tapctl, 'list'], capture_output=True, text=True, timeout=5)
+                        if 'MoggedVPN' in (chk_tap.stdout or ''):
+                            adapter_exists = True
+                    except Exception:
+                        pass
+                if not adapter_exists:
+                    for tap_cmd in [
+                        [tapctl, 'create', '--hwid', 'root\\tap0901', '--name', 'MoggedVPN'],
+                        [tapctl, 'create', '--hwid', 'tap0901', '--name', 'MoggedVPN'],
+                        [tapctl, 'create', '--name', 'MoggedVPN'],
+                    ]:
+                        try:
+                            res = subprocess.run(tap_cmd, capture_output=True, timeout=10)
+                            if res.returncode == 0:
+                                break
+                        except Exception:
+                            pass
             target_exe = os.path.join(self.install_dir, EXE_NAME)
             if not os.path.isfile(target_exe):
                 target_exe = os.path.join(self.install_dir, 'dist', 'MoggedVPN', EXE_NAME)
@@ -309,7 +323,7 @@ class InstallerApp:
                 winreg.SetValueEx(key, 'DisplayVersion', 0, winreg.REG_SZ, '1.1.0')
                 winreg.SetValueEx(key, 'Publisher', 0, winreg.REG_SZ, 'Mogged Security')
                 winreg.SetValueEx(key, 'InstallLocation', 0, winreg.REG_SZ, self.install_dir)
-                uninst_cmd = f'powershell.exe -NoProfile -Command "Stop-Process -Name MoggedVPN -Force -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force \'{self.install_dir}\' -ErrorAction SilentlyContinue; Remove-Item -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MoggedVPN\' -Recurse -Force -ErrorAction SilentlyContinue"'
+                uninst_cmd = f'powershell.exe -NoProfile -Command "Stop-Process -Name MoggedVPN -Force -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force \'{self.install_dir}\' -ErrorAction SilentlyContinue; Remove-Item -Force (Join-Path ([Environment]::GetFolderPath(\'Desktop\')) \'Mogged VPN.lnk\') -ErrorAction SilentlyContinue; Remove-Item -Force (Join-Path ([Environment]::GetFolderPath(\'CommonDesktopDirectory\')) \'Mogged VPN.lnk\') -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force (Join-Path ([Environment]::GetFolderPath(\'Programs\')) \'Mogged VPN\') -ErrorAction SilentlyContinue; Remove-Item -Force (Join-Path ([Environment]::GetFolderPath(\'Programs\')) \'Mogged VPN.lnk\') -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force (Join-Path ([Environment]::GetFolderPath(\'CommonPrograms\')) \'Mogged VPN\') -ErrorAction SilentlyContinue; Remove-Item -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MoggedVPN\' -Recurse -Force -ErrorAction SilentlyContinue"'
                 winreg.SetValueEx(key, 'UninstallString', 0, winreg.REG_SZ, uninst_cmd)
         except Exception:
             pass

@@ -16,6 +16,7 @@ import pytest
 from mogged.exceptions import ServerFetchError
 from mogged.network.server_fetcher import (
     ServerFetcher,
+    _AutoOvpnJsonParser,
     clean_country_name,
     get_country_flag,
 )
@@ -161,13 +162,11 @@ def _build_valid_csv(ip: str = "45.33.32.156") -> bytes:
 
 
 def test_fetch_parses_valid_csv(tmp_path: Path) -> None:
-    """Verificar que ServerFetcher parse e devolve entrada CSV válida."""
     mock_resp = _make_mock_resp(_build_valid_csv())
-
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["https://test.local/api"]):
+    single_provider = [{"name": "vpngate", "url": "https://test.local/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             fetcher = ServerFetcher(cache_dir=tmp_path)
-            # Isolate from project-root bundled servers_cache.json
             with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
                 servers = fetcher.fetch(force_refresh=True)
 
@@ -182,28 +181,19 @@ def test_fetch_parses_valid_csv(tmp_path: Path) -> None:
 
 
 def test_fetch_skips_private_ips_in_csv(tmp_path: Path) -> None:
-    """Entradas com IPs privados no CSV devem ser descartadas silenciosamente."""
     mock_resp = _make_mock_resp(_build_valid_csv(ip="192.168.1.1"))
-
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["https://test.local/api"]):
+    single_provider = [{"name": "vpngate", "url": "https://test.local/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             fetcher = ServerFetcher(cache_dir=tmp_path)
-            # Isolate from bundled cache so we actually hit the "no valid servers" path
             with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
                 with pytest.raises(ServerFetchError):
-                    # IP privado → nenhum servidor válido → sem cache → exceção
                     fetcher.fetch(force_refresh=True)
 
 
-# ---------------------------------------------------------------------------
-# ServerFetcher — CACHE LOCAL
-# ---------------------------------------------------------------------------
-
-
 def test_fetch_returns_cache_when_fresh(tmp_path: Path) -> None:
-    """Se o cache for recente (< 600s), não deve chamar a rede."""
     cached_data = {
-        "timestamp": time.time(),  # fresquíssimo
+        "timestamp": time.time(),
         "servers": [{"ip": "8.8.8.8", "name": "cached", "port": 443, "protocol": "tcp"}],
     }
     cache_dir = tmp_path / "cache"
@@ -220,29 +210,22 @@ def test_fetch_returns_cache_when_fresh(tmp_path: Path) -> None:
 
 
 def test_fetch_raises_when_no_servers_and_no_cache(tmp_path: Path) -> None:
-    """Sem rede e sem cache deve lançar ServerFetchError."""
+    invalid_providers = [{"name": "vpngate", "url": "https://nowhere.invalid/api", "parser": "vpngate", "priority": 1}]
     with patch(
-        "mogged.network.server_fetcher.VPN_GATE_API_URLS",
-        ["https://nowhere.invalid/api"],
+        "mogged.network.server_fetcher.OPENVPN_PROVIDERS",
+        invalid_providers,
     ):
         with patch("urllib.request.urlopen", side_effect=OSError("no route")):
             fetcher = ServerFetcher(cache_dir=tmp_path)
-            # Isolate from bundled servers_cache.json at project root
             with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
                 with pytest.raises(ServerFetchError):
                     fetcher.fetch(force_refresh=True)
 
 
-# ---------------------------------------------------------------------------
-# ServerFetcher — SANITIZAÇÃO DE DADOS
-# ---------------------------------------------------------------------------
-
-
 def test_server_name_does_not_contain_raw_ip(tmp_path: Path) -> None:
-    """O campo 'name' deve usar formato 'Node-XX-NN', nunca o IP bruto."""
     mock_resp = _make_mock_resp(_build_valid_csv())
-
-    with patch("mogged.network.server_fetcher.VPN_GATE_API_URLS", ["https://test.local/api"]):
+    single_provider = [{"name": "vpngate", "url": "https://test.local/api", "parser": "vpngate", "priority": 1}]
+    with patch("mogged.network.server_fetcher.OPENVPN_PROVIDERS", single_provider):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             fetcher = ServerFetcher(cache_dir=tmp_path)
             with patch.object(fetcher, "load_cache", return_value=([], 0.0)):
@@ -254,7 +237,6 @@ def test_server_name_does_not_contain_raw_ip(tmp_path: Path) -> None:
 
 
 def test_save_and_load_cache_roundtrip(tmp_path: Path) -> None:
-    """ServerFetcher.save_cache seguido de load_cache deve recuperar os mesmos dados."""
     cache_dir = tmp_path / "c"
     fetcher = ServerFetcher(cache_dir=cache_dir)
     servers = [{"ip": "1.2.3.4", "name": "test-node", "port": 443, "protocol": "tcp"}]
@@ -262,3 +244,86 @@ def test_save_and_load_cache_roundtrip(tmp_path: Path) -> None:
     loaded, ts = fetcher.load_cache()
     assert loaded == servers
     assert ts > 0
+
+
+def test_auto_ovpn_json_parser_valid() -> None:
+    ovpn_cfg = "client\ndev tun\nproto udp\nremote 45.33.32.156 1194\n"
+    ovpn_b64 = base64.b64encode(ovpn_cfg.encode()).decode()
+    payload = [
+        {
+            "servers": [
+                {
+                    "ip": "45.33.32.156",
+                    "countryshort": "JP",
+                    "countrylong": "Japan",
+                    "openvpn_configdata_base64": ovpn_b64,
+                    "ping": "15",
+                    "speed": "10485760",
+                    "numvpnsessions": "5",
+                }
+            ]
+        },
+        123456789,
+    ]
+    raw = json.dumps(payload).encode("utf-8")
+    parser = _AutoOvpnJsonParser()
+    servers = parser.parse(raw)
+    assert len(servers) == 1
+    s = servers[0]
+    assert s["ip"] == "45.33.32.156"
+    assert s["country_short"] == "JP"
+    assert s["country_long"] == "Japan"
+    assert s["ping"] == 15
+    assert s["speed_mbps"] == 10.0
+    assert s["sessions"] == 5
+    assert s["source"] == "auto_ovpn"
+    assert s["port"] == 1194
+    assert s["protocol"] == "udp"
+
+
+def test_auto_ovpn_json_parser_corrupted_json() -> None:
+    parser = _AutoOvpnJsonParser()
+    assert parser.parse(b"not json at all") == []
+    assert parser.parse(b"") == []
+    assert parser.parse(b"{}") == []
+    assert parser.parse(b"[]") == []
+    assert parser.parse(b"[1, 2, 3]") == []
+    assert parser.parse(json.dumps([{"servers": "not_a_list"}]).encode("utf-8")) == []
+
+
+def test_auto_ovpn_json_parser_invalid_entries() -> None:
+    parser = _AutoOvpnJsonParser()
+    payload = [
+        {
+            "servers": [
+                {
+                    "ip": "10.0.0.1",
+                    "countryshort": "US",
+                    "countrylong": "USA",
+                    "openvpn_configdata_base64": "dummy",
+                },
+                {
+                    "ip": "45.33.32.156",
+                    "countryshort": "US",
+                    "countrylong": "USA",
+                    "openvpn_configdata_base64": "",
+                },
+                {
+                    "ip": "45.33.32.156",
+                    "countryshort": "US",
+                    "countrylong": "USA",
+                    "openvpn_configdata_base64": base64.b64encode(b"remote 45.33.32.156 443").decode(),
+                    "ping": "invalid",
+                    "speed": "invalid",
+                    "numvpnsessions": "invalid",
+                },
+            ]
+        }
+    ]
+    servers = parser.parse(json.dumps(payload).encode("utf-8"))
+    assert len(servers) == 1
+    s = servers[0]
+    assert s["ip"] == "45.33.32.156"
+    assert s["ping"] == 999
+    assert s["speed_mbps"] == 0.0
+    assert s["sessions"] == 0

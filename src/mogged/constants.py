@@ -25,16 +25,10 @@ OPENVPN_PROVIDERS = [
         "priority": 1,
     },
     {
-        "name": "vpngate_udp",
-        "url": "https://raw.githubusercontent.com/hoang-rio/vpn-gate-openvpn-udp/refs/heads/master/vpn_servers.csv",
-        "parser": "vpngate",
-        "priority": 2,
-    },
-    {
         "name": "auto_ovpn",
-        "url": "https://api.github.com/repos/9xN/auto-ovpn/git/trees/main?recursive=1",
+        "url": "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
         "parser": "auto_ovpn",
-        "priority": 3,
+        "priority": 2,
     },
 ]
 
