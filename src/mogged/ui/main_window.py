@@ -202,12 +202,16 @@ class MainWindow:
         self.vpn_manager = VPNManager(on_status_change=self._on_status_change)
 
         self.current_mode = MODE_FULL
-        self.servers: List[Dict[str, Any]] = []
+        self.servers, _ = self.fetcher.load_cache()
+        if not self.servers:
+            from mogged.network.fallback_servers import FALLBACK_SERVERS
+            self.servers = list(FALLBACK_SERVERS)
+        self.server_manager.set_servers(self.servers)
         self.countries: List[Dict[str, Any]] = []
         self.selected_country_code = ""
         self.selected_server: Optional[Dict[str, Any]] = None
         self.expanded_countries = set()
-        self.selected_country_label = "Carregando servidores..."
+        self.selected_country_label = "Carregando..."
         self.controls_hidden = False
         self.public_ip = "Verificando..."
         self.popup_menu: Optional[tk.Toplevel] = None
@@ -221,6 +225,9 @@ class MainWindow:
 
         self._render_background()
         self._create_canvas_items()
+
+        self._recalculate_countries()
+        self._populate_countries()
 
         threading.Thread(target=self._fast_fetch_ip, daemon=True).start()
         threading.Thread(target=self._load_servers_thread, daemon=True).start()
@@ -445,14 +452,28 @@ class MainWindow:
             except Exception:
                 pass
 
+    def _safe_after(self, delay_ms: int, func: Any) -> None:
+        try:
+            self.root.after(delay_ms, func)
+        except Exception:
+            pass
+
     def _load_servers_thread(self, force_refresh: bool = False) -> None:
         try:
-            self.servers = self.fetcher.fetch(force_refresh=force_refresh)
-            self.server_manager.set_servers(self.servers)
-            self._recalculate_countries()
-            self.root.after(0, self._populate_countries)
+            fresh_servers = self.fetcher.fetch(force_refresh=force_refresh)
+            if fresh_servers:
+                self.servers = fresh_servers
+                self.server_manager.set_servers(self.servers)
+                self._recalculate_countries()
+                self._safe_after(0, self._populate_countries)
         except Exception as e:
             logger.error(f"Erro ao carregar servidores: {e}")
+            if not self.servers:
+                from mogged.network.fallback_servers import FALLBACK_SERVERS
+                self.servers = list(FALLBACK_SERVERS)
+                self.server_manager.set_servers(self.servers)
+                self._recalculate_countries()
+            self._safe_after(0, self._populate_countries)
 
     def _recalculate_countries(self) -> None:
         grouped: Dict[str, Dict[str, Any]] = {}
@@ -622,18 +643,11 @@ class MainWindow:
                 try:
                     self.root.after(0, lambda: self.canvas.itemconfigure(self.status_text, text="Testando servidores..."))
                     if not self.servers:
-                        self.root.after(0, lambda: self.canvas.itemconfigure(self.status_text, text="Buscando servidores..."))
-                        t_wait = time.time()
-                        while not self.servers and (time.time() - t_wait < 6.0):
-                            time.sleep(0.25)
-                        if not self.servers:
-                            self.servers = self.fetcher.fetch(force_refresh=False)
-                            if not self.servers:
-                                self.servers = self.fetcher.fetch(force_refresh=True)
-                            if self.servers:
-                                self.server_manager.set_servers(self.servers)
-                                self._recalculate_countries()
-                                self.root.after(0, self._populate_countries)
+                        from mogged.network.fallback_servers import FALLBACK_SERVERS
+                        self.servers = list(FALLBACK_SERVERS)
+                        self.server_manager.set_servers(self.servers)
+                        self._recalculate_countries()
+                        self.root.after(0, self._populate_countries)
 
                     if not self.selected_country_code and self.countries:
                         self.selected_country_code = self.countries[0]["code"]
@@ -654,6 +668,9 @@ class MainWindow:
                         if global_checked and any(s.get("live_rtt") is not None for s in global_checked):
                             active_pool = [s for s in global_checked if s.get("live_rtt") is not None]
 
+                    if not active_pool:
+                        active_pool = list(self.servers)
+
                     target = active_pool[0]
                     raw_fallbacks = self.server_manager.get_fallback_candidates(self.selected_country_code, exclude_server_id=target.get("id"))
                     confirmed_fallbacks = [s for s in active_pool[1:3] if s.get("live_rtt") is not None and s.get("id") != target.get("id")]
@@ -662,11 +679,15 @@ class MainWindow:
                             confirmed_fallbacks.append(fb)
 
                     self.vpn_manager.connect(target, mode=self.current_mode, fallback_servers=confirmed_fallbacks)
+                except Exception as e:
+                    logger.error(f"Erro na conexao: {e}")
+                    self.root.after(0, lambda: self._apply_status(STATUS_ERROR, "Erro na conexão. Tente novamente."))
                 finally:
                     self._connect_in_progress = False
 
             threading.Thread(target=_async_conn, daemon=True).start()
         else:
+            self._connect_in_progress = False
             self.canvas.itemconfigure(self.ip_text, text="IP: Atualizando...")
             self.vpn_manager.disconnect()
 
@@ -674,6 +695,7 @@ class MainWindow:
         self.root.after(0, lambda: self._apply_status(status, msg))
 
     def _apply_status(self, status: str, msg: str) -> None:
+        self._connect_in_progress = False
         self._update_connect_button()
         if status == STATUS_CONNECTED:
             self.canvas.itemconfigure(self.status_dot, fill="#22c55e")
@@ -696,7 +718,7 @@ class MainWindow:
             self.canvas.itemconfigure(self.status_text, text=clean_msg)
         elif status == STATUS_ERROR:
             self.canvas.itemconfigure(self.status_dot, fill="#ef4444")
-            err_text = "Falha na Conexão" if ("Falha ao conectar" in (msg or "") or len(msg or "") > 22) else (msg or "Erro de Conexão")
+            err_text = "Falha na Conexão. Tente novamente." if ("Falha ao conectar" in (msg or "") or len(msg or "") > 22) else (msg or "Erro de Conexão")
             self.canvas.itemconfigure(self.status_text, text=err_text)
             if self.vpn_manager.active_server:
                 srv_id = self.vpn_manager.active_server.get("id", "")

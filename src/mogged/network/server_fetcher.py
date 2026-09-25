@@ -274,19 +274,25 @@ class ServerFetcher:
                         with open(bundled, "r", encoding="utf-8") as f:
                             data = json.load(f)
                             srvs = self._ensure_server_metadata(data.get("servers", []))
-                            return srvs, float(data.get("timestamp", 0))
+                            if srvs:
+                                return srvs, float(data.get("timestamp", 0))
                     except Exception as e:
                         logger.warning(f"Erro ao carregar cache bundled: {e}")
-            return [], 0.0
+            from mogged.network.fallback_servers import FALLBACK_SERVERS
+            return list(FALLBACK_SERVERS), 0.0
 
         try:
             with open(self.cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 srvs = self._ensure_server_metadata(data.get("servers", []))
-                return srvs, float(data.get("timestamp", 0))
+                if srvs:
+                    return srvs, float(data.get("timestamp", 0))
+                from mogged.network.fallback_servers import FALLBACK_SERVERS
+                return list(FALLBACK_SERVERS), 0.0
         except Exception as e:
             logger.warning(f"Falha ao ler cache de servidores: {e}")
-            return [], 0.0
+            from mogged.network.fallback_servers import FALLBACK_SERVERS
+            return list(FALLBACK_SERVERS), 0.0
 
     def save_cache(self, servers: List[Dict[str, Any]]) -> None:
         try:
@@ -323,9 +329,8 @@ class ServerFetcher:
 
     def fetch(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         cached_servers, last_time = self.load_cache()
-        now = time.time()
 
-        if not force_refresh and cached_servers and (now - last_time < 180):
+        if not force_refresh and cached_servers:
             return cached_servers
 
         providers = sorted(OPENVPN_PROVIDERS, key=lambda p: p.get("priority", 99))
@@ -349,9 +354,9 @@ class ServerFetcher:
             threads.append(t)
             t.start()
 
-        join_deadline = time.time() + SERVER_FETCH_TIMEOUT_SEC + 5.0
+        join_deadline = time.time() + min(SERVER_FETCH_TIMEOUT_SEC, 5.0)
         for t in threads:
-            rem = max(0.1, join_deadline - time.time())
+            rem = max(0.05, join_deadline - time.time())
             t.join(timeout=rem)
 
         for provider in providers:

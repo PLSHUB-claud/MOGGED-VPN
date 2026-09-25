@@ -86,3 +86,18 @@ class SecureStore:
                 except Exception as ex_bak:
                     logger.error(f"Falha ao restaurar backup: {ex_bak}")
             return {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            data = self.load()
+            return data.get(key, default)
+        except Exception:
+            return default
+
+    def set(self, key: str, value: Any) -> None:
+        try:
+            data = self.load()
+            data[key] = value
+            self.save(data)
+        except Exception as e:
+            logger.warning(f"Erro ao salvar chave {key} no SecureStore: {e}")
